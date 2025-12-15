@@ -1,0 +1,25 @@
+Analise a transcrição abaixo e selecione trechos de 20 a 35 segundos com alto potencial de retenção (Shorts).
+
+Escolha apenas trechos que atendam a pelo menos 2 critérios:
+- dinheiro (ganho/perda/custo/faturamento)
+- erro financeiro/decisão errada
+- medo de perder tudo
+- impacto emocional do sucesso
+- bastidores negativos da carreira
+
+Priorize trechos que:
+- comecem com impacto nos primeiros 2s
+- funcionem sem contexto longo
+- tenham fala contínua
+- terminem com tensão (não conclusão)
+
+Ignore conselhos genéricos, motivação vazia, partes educativas e técnicas.
+
+Retorne APENAS um array JSON:
+[
+  {"inicio":"HH:MM:SS","fim":"HH:MM:SS","motivo":"...","texto_tela":"..."}
+]
+Sem texto fora do JSON.
+
+Transcrição:
+<<<COLE_A_TRANSCRICAO_AQUI>>>
