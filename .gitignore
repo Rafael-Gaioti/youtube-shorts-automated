@@ -37,18 +37,43 @@ env/
 .DS_Store
 Thumbs.db
 
-# Project specific
+# Project specific - Data folders
+data/raw/*.mp4
+data/raw/*.mp3
+data/transcripts/*.json
+data/analysis/*.json
+data/output/*.mp4
+data/output/shorts/*.mp4
+
+# Keep folder structure but ignore content
+!data/raw/.gitkeep
+!data/transcripts/.gitkeep
+!data/analysis/.gitkeep
+!data/output/.gitkeep
+
+# Video and audio files
 *.mp4
 *.mp3
 *.wav
 *.avi
 *.mov
-data/videos/
-data/temp/
-data/output/
+*.mkv
+*.flv
+*.webm
+*.m4a
+
+# Models cache
+models/*.pt
+models/*.bin
+models/*.onnx
+
+# Logs
+logs/*.log
+logs/*.txt
 
 # API Keys and secrets
 .env
 *.key
 credentials.json
 config.json
+secrets/

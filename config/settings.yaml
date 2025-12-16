@@ -1,0 +1,79 @@
+# YouTube Shorts Automation - Configuration File
+
+# Project Paths
+paths:
+  data_root: "data"
+  raw_videos: "data/raw"
+  transcripts: "data/transcripts"
+  analysis: "data/analysis"
+  output: "data/output"
+  models: "models"
+  logs: "logs"
+  prompts: "config/prompts"
+
+# Whisper Configuration (Optimized for RTX 4060)
+whisper_config:
+  model_size: "large-v3"  # Options: tiny, base, small, medium, large-v2, large-v3
+  device: "cuda"  # Use GPU acceleration
+  compute_type: "float16"  # Optimized for RTX 4060 (8GB VRAM)
+  beam_size: 5
+  language: "pt"  # Portuguese
+  task: "transcribe"
+  vad_filter: true  # Voice Activity Detection
+  vad_parameters:
+    threshold: 0.5
+    min_speech_duration_ms: 250
+    max_speech_duration_s: 30
+    min_silence_duration_ms: 500
+
+# Claude API Configuration
+claude_config:
+  model: "claude-sonnet-4-20250514"  # Latest Sonnet model
+  max_tokens: 4000
+  temperature: 0.7
+  top_p: 0.9
+  timeout: 300  # seconds
+
+# Video Processing Configuration
+video_config:
+  output_format: "mp4"
+  resolution: "1080x1920"  # Vertical format for Shorts
+  fps: 30
+  video_codec: "libx264"
+  audio_codec: "aac"
+  audio_bitrate: "192k"
+  video_bitrate: "5000k"
+  preset: "medium"  # Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+  crf: 23  # Constant Rate Factor (lower = better quality, 18-28 recommended)
+
+# YouTube Download Configuration
+download_config:
+  format: "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+  max_resolution: "1080p"
+  extract_audio: true
+  audio_format: "mp3"
+  subtitle_langs: ["pt", "en"]
+
+# Cuts Analysis Configuration
+cuts_config:
+  min_duration: 20  # seconds
+  max_duration: 35  # seconds (Shorts limit: 60s)
+  target_duration: 30  # ideal duration
+  min_retention_score: 8  # minimum score (0-10) to select a cut
+  max_cuts_per_video: 5  # maximum number of cuts to extract
+  overlap_tolerance: 2  # seconds of allowed overlap between cuts
+
+# Logging Configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+  file_logging: true
+  console_logging: true
+
+# Performance Configuration
+performance:
+  use_gpu: true
+  batch_size: 16  # for Whisper processing
+  num_workers: 4  # parallel processing threads
+  cache_enabled: true

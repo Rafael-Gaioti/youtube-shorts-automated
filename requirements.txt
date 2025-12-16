@@ -1,0 +1,25 @@
+# YouTube Download
+yt-dlp>=2024.8.6
+
+# Audio Transcription (GPU Accelerated for RTX 4060)
+faster-whisper>=1.0.0
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# AI Analysis
+anthropic>=0.39.0
+
+# Video Processing
+ffmpeg-python>=0.2.0
+
+# Configuration & Utilities
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+pandas>=2.0.0
+tqdm>=4.66.0
+
+# Logging & Monitoring
+colorlog>=6.8.0
+
+# Type Checking (Development)
+typing-extensions>=4.8.0
