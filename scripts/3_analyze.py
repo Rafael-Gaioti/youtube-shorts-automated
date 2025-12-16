@@ -160,30 +160,94 @@ Analise e retorne os {max_cuts} melhores momentos em JSON."""
             if response_text.startswith("json"):
                 response_text = response_text[4:]
 
-        analysis_data = json.loads(response_text)
+        # Parse pode retornar array direto ou objeto com "cuts"
+        parsed_data = json.loads(response_text)
+
+        # Normalizar para formato consistente
+        if isinstance(parsed_data, list):
+            cuts_list = parsed_data
+        elif isinstance(parsed_data, dict) and 'cuts' in parsed_data:
+            cuts_list = parsed_data['cuts']
+        else:
+            raise ValueError("Formato JSON inválido: esperado array ou objeto com 'cuts'")
+
     except json.JSONDecodeError as e:
         logger.error(f"Erro ao fazer parse do JSON: {e}")
         logger.error(f"Resposta: {response_text}")
         raise
+    except ValueError as e:
+        logger.error(f"Erro de formato: {e}")
+        logger.error(f"Resposta: {response_text}")
+        raise
 
-    # Adicionar metadados
-    analysis_data['video_id'] = transcript_data['video_id']
-    analysis_data['transcript_path'] = str(transcript_path)
-    analysis_data['config'] = {
-        'min_duration': cuts_cfg['min_duration'],
-        'max_duration': cuts_cfg['max_duration'],
-        'min_retention_score': cuts_cfg['min_retention_score']
-    }
+    # Validar e normalizar cada corte
+    min_viral_score = cuts_cfg.get('min_viral_score', cuts_cfg.get('min_retention_score', 8.0))
 
-    # Filtrar por score mínimo
-    original_count = len(analysis_data.get('cuts', []))
-    analysis_data['cuts'] = [
-        cut for cut in analysis_data.get('cuts', [])
-        if cut.get('retention_score', 0) >= cuts_cfg['min_retention_score']
+    validated_cuts = []
+    for cut in cuts_list:
+        # Garantir campos obrigatórios
+        if 'start' not in cut or 'end' not in cut:
+            logger.warning(f"Corte sem timestamps: {cut}")
+            continue
+
+        # Calcular duration se não existir
+        if 'duration' not in cut:
+            cut['duration'] = cut['end'] - cut['start']
+
+        # Normalizar score (aceitar viral_score ou retention_score)
+        viral_score = cut.get('viral_score', cut.get('retention_score', 0))
+        cut['viral_score'] = viral_score
+
+        # Garantir campos do novo formato
+        cut.setdefault('content_type', 'unknown')
+        cut.setdefault('emotions', [])
+        cut.setdefault('keywords', [])
+        cut.setdefault('hook', '')
+        cut.setdefault('cliffhanger', '')
+        cut.setdefault('on_screen_text', '')
+        cut.setdefault('target_audience', 'geral')
+        cut.setdefault('reason', cut.get('rationale', ''))
+
+        validated_cuts.append(cut)
+
+    # Filtrar por viral score mínimo
+    original_count = len(validated_cuts)
+    filtered_cuts = [
+        cut for cut in validated_cuts
+        if cut['viral_score'] >= min_viral_score
     ]
 
-    logger.info(f"Cortes sugeridos: {original_count}")
-    logger.info(f"Cortes após filtro (score >= {cuts_cfg['min_retention_score']}): {len(analysis_data['cuts'])}")
+    # Ordenar por viral_score (maior primeiro)
+    filtered_cuts.sort(key=lambda x: x['viral_score'], reverse=True)
+
+    # Limitar ao máximo de cortes para exportação
+    max_cuts_to_export = cuts_cfg.get('max_cuts_to_export', max_cuts)
+    final_cuts = filtered_cuts[:max_cuts_to_export]
+
+    logger.info(f"Cortes analisados: {original_count}")
+    logger.info(f"Após filtro (viral_score >= {min_viral_score}): {len(filtered_cuts)}")
+    logger.info(f"Selecionados para exportação: {len(final_cuts)}")
+
+    # Montar estrutura final
+    analysis_data = {
+        'video_id': transcript_data['video_id'],
+        'transcript_path': str(transcript_path),
+        'config': {
+            'min_duration': cuts_cfg['min_duration'],
+            'max_duration': cuts_cfg['max_duration'],
+            'min_viral_score': min_viral_score,
+            'max_cuts_to_export': max_cuts_to_export
+        },
+        'cuts': final_cuts,
+        'stats': {
+            'total_analyzed': original_count,
+            'filtered': len(filtered_cuts),
+            'exported': len(final_cuts),
+            'avg_viral_score': sum(c['viral_score'] for c in final_cuts) / len(final_cuts) if final_cuts else 0
+        }
+    }
+
+    logger.info(f"Score viral médio: {analysis_data['stats']['avg_viral_score']:.1f}/10")
 
     # Salvar análise
     output_file = output_dir / f"{transcript_data['video_id']}_analysis.json"
@@ -220,12 +284,16 @@ def main():
         analysis = analyze_transcript(transcript_path)
 
         print(f"\n✓ Análise concluída!")
-        print(f"Cortes identificados: {len(analysis['cuts'])}")
+        print(f"Cortes selecionados: {len(analysis['cuts'])}")
+        print(f"Score viral médio: {analysis['stats']['avg_viral_score']:.1f}/10")
 
         for i, cut in enumerate(analysis['cuts'], 1):
-            print(f"\n{i}. {cut['title']}")
-            print(f"   Tempo: {cut['start']:.1f}s - {cut['end']:.1f}s ({cut['end']-cut['start']:.1f}s)")
-            print(f"   Score: {cut['retention_score']}/10")
+            print(f"\n{i}. [{cut['content_type']}] Score: {cut['viral_score']:.1f}/10")
+            print(f"   Tempo: {cut['start']:.1f}s - {cut['end']:.1f}s ({cut['duration']:.1f}s)")
+            print(f"   Texto tela: {cut.get('on_screen_text', 'N/A')}")
+            print(f"   Hook: {cut.get('hook', 'N/A')[:50]}...")
+            print(f"   Emoções: {', '.join(cut.get('emotions', []))}")
+            print(f"   Motivo: {cut.get('reason', 'N/A')[:80]}...")
 
         print(f"\nPróximo passo: python scripts/4_cut.py")
 

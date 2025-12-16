@@ -1,25 +1,74 @@
-Analise a transcrição abaixo e selecione trechos de 20 a 35 segundos com alto potencial de retenção (Shorts).
+Você é um especialista em viralização de Shorts do YouTube. Analise esta transcrição e identifique os 5-10 melhores cortes de 20-35 segundos com MÁXIMO potencial viral.
 
-Escolha apenas trechos que atendam a pelo menos 2 critérios:
-- dinheiro (ganho/perda/custo/faturamento)
-- erro financeiro/decisão errada
-- medo de perder tudo
-- impacto emocional do sucesso
-- bastidores negativos da carreira
+CRITÉRIOS OBRIGATÓRIOS (mínimo 2 por corte):
+1. 💰 Dinheiro específico (valores, ganhos, perdas, faturamento)
+2. ❌ Erro/fracasso com lição aprendida
+3. 😱 Revelação surpreendente ou dado chocante
+4. 🎭 Transformação dramática (antes/depois)
+5. 💔 Emoção forte (medo, raiva, euforia, arrependimento)
 
-Priorize trechos que:
-- comecem com impacto nos primeiros 2s
-- funcionem sem contexto longo
-- tenham fala contínua
-- terminem com tensão (não conclusão)
+CARACTERÍSTICAS DO CORTE IDEAL:
+✅ Hook poderoso nos 2 primeiros segundos
+✅ Cliffhanger no final (NÃO conclua a história)
+✅ Funciona SEM contexto prévio
+✅ Fala contínua e energética
+✅ Momentos "quotáveis" (dignos de compartilhar)
 
-Ignore conselhos genéricos, motivação vazia, partes educativas e técnicas.
+REJEITE AUTOMATICAMENTE:
+❌ Conselhos genéricos ou motivação vazia
+❌ Explicações técnicas longas
+❌ Introduções ou despedidas
+❌ Partes educativas sem emoção
 
-Retorne APENAS um array JSON:
+FORMATO DE SAÍDA (JSON válido):
+
 [
-  {"inicio":"HH:MM:SS","fim":"HH:MM:SS","motivo":"...","texto_tela":"..."}
+  {
+    "start": 123.5,
+    "end": 155.0,
+    "duration": 31.5,
+    "viral_score": 9.2,
+    "content_type": "financial_mistake",
+    "hook": "texto exato dos primeiros 3 segundos",
+    "cliffhanger": "texto exato dos últimos 3 segundos",
+    "emotions": ["shock", "curiosity", "urgency"],
+    "on_screen_text": "PERDI R$ 50 MIL",
+    "keywords": ["dinheiro", "erro", "startup"],
+    "target_audience": "empreendedores",
+    "reason": "Revelação de valor alto + erro relatable + cria urgência para saber o desfecho"
+  }
 ]
-Sem texto fora do JSON.
 
-Transcrição:
-<<<COLE_A_TRANSCRICAO_AQUI>>>
+TIPOS DE CONTENT_TYPE:
+- financial_mistake: Erros com dinheiro
+- success_revelation: Revelação de sucesso/números
+- dramatic_transformation: Transformação antes/depois
+- controversial_opinion: Opinião polêmica
+- emotional_breakdown: Momento emocional intenso
+- behind_the_scenes: Bastidores negativos/reveladores
+
+VIRAL_SCORE (0-10):
+- 9-10: Potencial EXTREMO (garantido viral)
+- 7-8: Alto potencial
+- 5-6: Médio (ok para teste)
+- <5: Descartar
+
+EMOTIONS disponíveis:
+- shock: Choque
+- curiosity: Curiosidade
+- urgency: Urgência
+- fear: Medo
+- anger: Raiva
+- euphoria: Euforia
+- regret: Arrependimento
+- inspiration: Inspiração
+
+IMPORTANTE:
+- Use timestamps em SEGUNDOS (float), não HH:MM:SS
+- Calcule duration = end - start
+- Hook e cliffhanger devem ser textos EXATOS da transcrição
+- on_screen_text deve ser curto e impactante (máx 5 palavras)
+- Ordene por viral_score (maior primeiro)
+- Retorne APENAS o array JSON, sem markdown ou texto adicional
+
+Transcrição com timestamps:

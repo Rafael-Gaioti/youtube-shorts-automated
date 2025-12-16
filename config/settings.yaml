@@ -59,8 +59,10 @@ cuts_config:
   min_duration: 20  # seconds
   max_duration: 35  # seconds (Shorts limit: 60s)
   target_duration: 30  # ideal duration
-  min_retention_score: 8  # minimum score (0-10) to select a cut
-  max_cuts_per_video: 5  # maximum number of cuts to extract
+  min_retention_score: 8  # minimum score (0-10) to select a cut (legacy, use min_viral_score)
+  min_viral_score: 8.0  # minimum viral score (0-10) for selection
+  max_cuts_per_video: 5  # maximum number of cuts to extract from analysis
+  max_cuts_to_export: 3  # maximum number of cuts to actually export (best ones)
   overlap_tolerance: 2  # seconds of allowed overlap between cuts
 
 # Logging Configuration
