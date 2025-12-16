@@ -77,3 +77,6 @@ logs/*.txt
 credentials.json
 config.json
 secrets/
+
+# Claude Code local settings
+.claude/
