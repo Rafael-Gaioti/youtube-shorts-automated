@@ -6,6 +6,7 @@ Baixa vídeos do YouTube usando yt-dlp com configurações otimizadas.
 import sys
 import logging
 import subprocess
+import shutil
 from pathlib import Path
 from typing import Optional
 import yaml
@@ -17,6 +18,10 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+def check_yt_dlp() -> bool:
+    """Verifica se yt-dlp está instalado."""
+    return shutil.which("yt-dlp") is not None
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -61,6 +66,13 @@ def download_video(url: str, output_dir: Optional[Path] = None) -> Path:
         url
     ]
 
+    # Verificar se yt-dlp está disponível
+    if not check_yt_dlp():
+        raise FileNotFoundError(
+            "yt-dlp não encontrado. Instale com: pip install yt-dlp\n"
+            "Ou execute: python scripts/check_dependencies.py"
+        )
+
     logger.info(f"Iniciando download de: {url}")
     logger.info(f"Salvando em: {output_dir}")
 
@@ -79,7 +91,11 @@ def download_video(url: str, output_dir: Optional[Path] = None) -> Path:
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Erro no download: {e}")
-        logger.error(f"Stderr: {e.stderr}")
+        if e.stderr:
+            logger.error(f"Detalhes: {e.stderr}")
+        raise
+    except FileNotFoundError as e:
+        logger.error(str(e))
         raise
 
 def main():
@@ -92,8 +108,8 @@ def main():
 
     try:
         video_path = download_video(url)
-        print(f"\n✓ Vídeo baixado com sucesso: {video_path}")
-        print(f"\nPróximo passo: python scripts/2_transcribe.py")
+        print(f"\n[SUCCESS] Video baixado com sucesso: {video_path}")
+        print(f"\nProximo passo: python scripts/2_transcribe.py")
 
     except Exception as e:
         logger.error(f"Erro fatal: {e}", exc_info=True)
