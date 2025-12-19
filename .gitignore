@@ -1,82 +1,20 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environment
+# Local models and data
+data/
+models/
+logs/
+temp_*/
+*.ass
+*.log
+ffmpeg_error.txt
+debug_last_ai_response.json
 .venv/
-venv/
-ENV/
-env/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Project specific - Data folders
-data/raw/*.mp4
-data/raw/*.mp3
-data/transcripts/*.json
-data/analysis/*.json
-data/output/*.mp4
-data/output/shorts/*.mp4
-
-# Keep folder structure but ignore content
-!data/raw/.gitkeep
-!data/transcripts/.gitkeep
-!data/analysis/.gitkeep
-!data/output/.gitkeep
-
-# Video and audio files
+__pycache__/
+*.jpg
 *.mp4
-*.mp3
-*.wav
-*.avi
-*.mov
-*.mkv
-*.flv
-*.webm
 *.m4a
-
-# Models cache
-models/*.pt
-models/*.bin
-models/*.onnx
-
-# Logs
-logs/*.log
-logs/*.txt
-
-# API Keys and secrets
-.env
-*.key
-credentials.json
-config.json
-secrets/
-
-# Claude Code local settings
-.claude/
+*.mp3
+*.json
+!config/**/*.json
+!package.json
+!tsconfig.json
+!data/.gitkeep

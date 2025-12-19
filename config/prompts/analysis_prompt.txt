@@ -1,4 +1,8 @@
-Você é um especialista em viralização de Shorts do YouTube. Analise esta transcrição e identifique os 5-10 melhores cortes de 20-35 segundos com MÁXIMO potencial viral.
+Você é um especialista em viralização de Shorts do YouTube. Analise esta transcrição e identifique os 3-10 melhores cortes (OBRIGATÓRIO identificar pelo menos 3) de 20-60 segundos.
+
+⚠️ REGRA DE OURO (CONTEXTO):
+O corte deve fazer sentido TOTAL sozinho. Se o "punchline" depende de uma frase anterior, INCLUA a frase anterior.
+NÃO corte no meio de uma ideia. É melhor um corte de 45s completo do que um de 15s sem sentido.
 
 CRITÉRIOS OBRIGATÓRIOS (mínimo 2 por corte):
 1. 💰 Dinheiro específico (valores, ganhos, perdas, faturamento)
@@ -8,17 +12,17 @@ CRITÉRIOS OBRIGATÓRIOS (mínimo 2 por corte):
 5. 💔 Emoção forte (medo, raiva, euforia, arrependimento)
 
 CARACTERÍSTICAS DO CORTE IDEAL:
-✅ Hook poderoso nos 2 primeiros segundos
-✅ Cliffhanger no final (NÃO conclua a história)
-✅ Funciona SEM contexto prévio
-✅ Fala contínua e energética
-✅ Momentos "quotáveis" (dignos de compartilhar)
+✅ Hook poderoso nos 2 primeiros segundos (se necessário, pegue de outra parte, mas prefira sequencial)
+✅ Cliffhanger no final (NÃO conclua a história se possível, deixe curiosidade)
+✅ Fala contínua e energética (evite pausas longas)
 
-REJEITE AUTOMATICAMENTE:
-❌ Conselhos genéricos ou motivação vazia
-❌ Explicações técnicas longas
-❌ Introduções ou despedidas
-❌ Partes educativas sem emoção
+REJEIÇÃO:
+❌ Cortes com menos de 15 segundos (MUITO CURTO)
+❌ Cortes com mais de 60 segundos (MUITO LONGO)
+❌ Conteúdo sem início claro ou fim abrupto sem propósito
+6. **IDENTIFICAÇÃO DE ORADOR (Obrigatório)**: Para cada linha (L0, L1...) do corte, atribua o ID do orador (1 ou 2).
+   - **REGRA DE CONTINUIDADE (CRÍTICO)**: Assuma que o Orador 1 é o principal. SÓ mude para o Orador 2 se houver uma mudança SEMÂNTICA clara (pergunta e resposta, debate, interrupção). Se for o mesmo orador continuando a ideia ou pausando, MANTENHA o mesmo ID. Não "invente" alternância onde não existe.
+   - Use o campo `speaker_map` no formato `{"L0": 1, "L1": 1, "L2": 2...}`.
 
 FORMATO DE SAÍDA (JSON válido):
 
@@ -35,7 +39,10 @@ FORMATO DE SAÍDA (JSON válido):
     "on_screen_text": "PERDI R$ 50 MIL",
     "keywords": ["dinheiro", "erro", "startup"],
     "target_audience": "empreendedores",
-    "reason": "Revelação de valor alto + erro relatable + cria urgência para saber o desfecho"
+    "reason": "Revelação de valor alto + erro relatable + cria urgência para saber o desfecho",
+    "speaker_map": {
+      "L12": 1, "L13": 1, "L14": 2, "L15": 2, "L16": 1
+    }
   }
 ]
 
@@ -66,6 +73,7 @@ EMOTIONS disponíveis:
 IMPORTANTE:
 - Use timestamps em SEGUNDOS (float), não HH:MM:SS
 - Calcule duration = end - start
+- **IMPORTANTÍSSIMO**: A lista de `speakers` deve ser COMPLETA. Se houver um diálogo rápido, garanta que todas as alternâncias de ID 1 e ID 2 estão mapeadas.
 - Hook e cliffhanger devem ser textos EXATOS da transcrição
 - on_screen_text deve ser curto e impactante (máx 5 palavras)
 - Ordene por viral_score (maior primeiro)

@@ -14,23 +14,41 @@ from dotenv import load_dotenv
 
 # Configurar logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
+
+def get_yt_dlp_path() -> str:
+    """Retorna o caminho do yt-dlp, priorizando a pasta do executável atual (venv)."""
+    # No Windows, em um venv, o yt-dlp.exe fica na mesma pasta que o python.exe (Scripts)
+    python_dir = Path(sys.executable).parent
+    yt_dlp_ext = ".exe" if sys.platform == "win32" else ""
+    local_yt_dlp = python_dir / f"yt-dlp{yt_dlp_ext}"
+
+    if local_yt_dlp.exists():
+        return str(local_yt_dlp)
+
+    # Fallback para o PATH global
+    return shutil.which("yt-dlp") or "yt-dlp"
+
+
 def check_yt_dlp() -> bool:
     """Verifica se yt-dlp está instalado."""
-    return shutil.which("yt-dlp") is not None
+    path = get_yt_dlp_path()
+    return shutil.which(path) is not None or Path(path).exists()
+
 
 # Carregar variáveis de ambiente
 load_dotenv()
 
+
 def load_config() -> dict:
     """Carrega configurações do arquivo YAML."""
     config_path = Path("config/settings.yaml")
-    with open(config_path, 'r', encoding='utf-8') as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
 
 def download_video(url: str, output_dir: Optional[Path] = None) -> Path:
     """
@@ -49,21 +67,25 @@ def download_video(url: str, output_dir: Optional[Path] = None) -> Path:
     config = load_config()
 
     if output_dir is None:
-        output_dir = Path(config['paths']['raw_videos'])
+        output_dir = Path(config["paths"]["raw_videos"])
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Extrair video_id da URL para nome do arquivo
     output_template = output_dir / "%(id)s.%(ext)s"
 
-    download_cfg = config['download_config']
+    download_cfg = config["download_config"]
 
+    yt_dlp_path = get_yt_dlp_path()
     cmd = [
-        "yt-dlp",
-        "-f", download_cfg['format'],
-        "-o", str(output_template),
-        "--merge-output-format", "mp4",
-        url
+        yt_dlp_path,
+        "-f",
+        download_cfg["format"],
+        "-o",
+        str(output_template),
+        "--merge-output-format",
+        "mp4",
+        url,
     ]
 
     # Verificar se yt-dlp está disponível
@@ -98,6 +120,7 @@ def download_video(url: str, output_dir: Optional[Path] = None) -> Path:
         logger.error(str(e))
         raise
 
+
 def main():
     """Função principal."""
     if len(sys.argv) < 2:
@@ -114,6 +137,7 @@ def main():
     except Exception as e:
         logger.error(f"Erro fatal: {e}", exc_info=True)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

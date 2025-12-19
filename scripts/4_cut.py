@@ -14,24 +14,23 @@ from dotenv import load_dotenv
 
 # Configurar logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 # Carregar variáveis de ambiente
 load_dotenv()
 
+
 def load_config() -> dict:
     """Carrega configurações do arquivo YAML."""
     config_path = Path("config/settings.yaml")
-    with open(config_path, 'r', encoding='utf-8') as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
+
 def cut_video(
-    video_path: Path,
-    analysis_path: Path,
-    output_dir: Optional[Path] = None
+    video_path: Path, analysis_path: Path, output_dir: Optional[Path] = None
 ) -> List[Path]:
     """
     Corta vídeo nos segmentos identificados.
@@ -56,14 +55,14 @@ def cut_video(
     config = load_config()
 
     if output_dir is None:
-        output_dir = Path(config['paths']['output'])
+        output_dir = Path(config["paths"]["output"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Carregar análise
-    with open(analysis_path, 'r', encoding='utf-8') as f:
+    with open(analysis_path, "r", encoding="utf-8") as f:
         analysis_data = json.load(f)
 
-    cuts = analysis_data.get('cuts', [])
+    cuts = analysis_data.get("cuts", [])
     if not cuts:
         logger.warning("Nenhum corte encontrado na análise")
         return []
@@ -73,35 +72,44 @@ def cut_video(
     output_files = []
 
     for i, cut in enumerate(cuts, 1):
-        start_time = cut['start']
-        end_time = cut['end']
+        start_time = cut["start"]
+        end_time = cut["end"]
         duration = end_time - start_time
 
         # Nome do arquivo de saída
         output_file = output_dir / f"{video_path.stem}_cut_{i:02d}.mp4"
 
-        logger.info(f"Corte {i}/{len(cuts)}: {start_time:.1f}s - {end_time:.1f}s ({duration:.1f}s)")
+        logger.info(
+            f"Corte {i}/{len(cuts)}: {start_time:.1f}s - {end_time:.1f}s ({duration:.1f}s)"
+        )
 
-        # Comando FFmpeg para corte preciso
+        # Comando FFmpeg para corte preciso com re-encode
+        # O re-encode é necessário para garantir que o vídeo comece EXATAMENTE no start_time (frame-accurate)
         cmd = [
             "ffmpeg",
-            "-y",  # Sobrescrever sem perguntar
-            "-ss", str(start_time),  # Seek para início
-            "-i", str(video_path),  # Input
-            "-t", str(duration),  # Duração
-            "-c", "copy",  # Copiar sem re-encode (rápido)
-            "-avoid_negative_ts", "1",  # Evitar timestamps negativos
-            str(output_file)
+            "-y",
+            "-ss",
+            str(start_time),
+            "-i",
+            str(video_path),
+            "-t",
+            str(duration),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(output_file),
         ]
 
         try:
-            subprocess.run(
-                cmd,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            logger.info(f"✓ Salvo: {output_file.name}")
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info(f"✓ Salvo (Re-encode preciso): {output_file.name}")
             output_files.append(output_file)
 
         except subprocess.CalledProcessError as e:
@@ -111,6 +119,7 @@ def cut_video(
 
     return output_files
 
+
 def find_latest_analysis() -> tuple[Path, Path]:
     """
     Encontra a análise mais recente e o vídeo correspondente.
@@ -119,8 +128,8 @@ def find_latest_analysis() -> tuple[Path, Path]:
         Tupla (video_path, analysis_path)
     """
     config = load_config()
-    analysis_dir = Path(config['paths']['analysis'])
-    raw_dir = Path(config['paths']['raw_videos'])
+    analysis_dir = Path(config["paths"]["analysis"])
+    raw_dir = Path(config["paths"]["raw_videos"])
 
     analyses = list(analysis_dir.glob("*_analysis.json"))
     if not analyses:
@@ -130,10 +139,10 @@ def find_latest_analysis() -> tuple[Path, Path]:
     latest_analysis = max(analyses, key=lambda p: p.stat().st_mtime)
 
     # Carrega para pegar o video_id
-    with open(latest_analysis, 'r', encoding='utf-8') as f:
+    with open(latest_analysis, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    video_id = data['video_id']
+    video_id = data["video_id"]
 
     # Procura o vídeo correspondente
     video_path = raw_dir / f"{video_id}.mp4"
@@ -143,6 +152,7 @@ def find_latest_analysis() -> tuple[Path, Path]:
 
     return video_path, latest_analysis
 
+
 def main():
     """Função principal."""
     if len(sys.argv) > 2:
@@ -151,10 +161,10 @@ def main():
     elif len(sys.argv) > 1:
         analysis_path = Path(sys.argv[1])
         # Tenta inferir o vídeo a partir da análise
-        with open(analysis_path, 'r', encoding='utf-8') as f:
+        with open(analysis_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         config = load_config()
-        raw_dir = Path(config['paths']['raw_videos'])
+        raw_dir = Path(config["paths"]["raw_videos"])
         video_path = raw_dir / f"{data['video_id']}.mp4"
     else:
         logger.info("Buscando análise e vídeo mais recentes...")
@@ -178,6 +188,7 @@ def main():
     except Exception as e:
         logger.error(f"Erro fatal: {e}", exc_info=True)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

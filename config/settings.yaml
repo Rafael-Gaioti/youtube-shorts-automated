@@ -13,38 +13,56 @@ paths:
 
 # Whisper Configuration (Optimized for RTX 4060)
 whisper_config:
-  model_size: "large-v3"  # Options: tiny, base, small, medium, large-v2, large-v3
-  device: "cuda"  # Use GPU acceleration
-  compute_type: "float16"  # Optimized for RTX 4060 (8GB VRAM)
+  model_size: "large-v3" # Options: tiny, base, small, medium, large-v2, large-v3
+  device: "cuda" # Use GPU acceleration
+  compute_type: "float16" # Optimized for RTX 4060 (8GB VRAM)
   beam_size: 5
-  language: "pt"  # Portuguese
+  language: "pt" # Portuguese
   task: "transcribe"
-  vad_filter: true  # Voice Activity Detection
+  vad_filter: true # Voice Activity Detection
   vad_parameters:
     threshold: 0.5
     min_speech_duration_ms: 250
     max_speech_duration_s: 30
     min_silence_duration_ms: 500
 
+# AI Analysis Configuration
+ai_provider: "ollama" # Options: openai, claude, ollama
+
 # Claude API Configuration
 claude_config:
-  model: "claude-sonnet-4-20250514"  # Latest Sonnet model
+  model: "claude-3-5-sonnet-20241022" # Latest 3.5 Sonnet model
   max_tokens: 4000
   temperature: 0.7
   top_p: 0.9
-  timeout: 300  # seconds
+  timeout: 300 # seconds
+
+# OpenAI API Configuration
+openai_config:
+  model: "gpt-4o" # Latest GPT-4o model
+  max_tokens: 4000
+  temperature: 0.7
+  timeout: 300 # seconds
+
+# Ollama (Local LLM) Configuration
+ollama_config:
+  model: "llama3" # Or "llama3.1", "mistral", etc.
+  base_url: "http://localhost:11434/v1" # Ollama's OpenAI-compatible endpoint
+  max_tokens: 4000
+  temperature: 0.1 # Lower temperature for more structured JSON output
+  timeout: 600 # seconds (local models might be slower)
 
 # Video Processing Configuration
 video_config:
   output_format: "mp4"
-  resolution: "1080x1920"  # Vertical format for Shorts
+  resolution: "1080x1920" # Vertical format for Shorts
   fps: 30
   video_codec: "libx264"
   audio_codec: "aac"
   audio_bitrate: "192k"
   video_bitrate: "5000k"
-  preset: "medium"  # Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
-  crf: 23  # Constant Rate Factor (lower = better quality, 18-28 recommended)
+  preset: "medium" # Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+  crf: 23 # Constant Rate Factor (lower = better quality, 18-28 recommended)
 
 # YouTube Download Configuration
 download_config:
@@ -56,18 +74,18 @@ download_config:
 
 # Cuts Analysis Configuration
 cuts_config:
-  min_duration: 20  # seconds
-  max_duration: 35  # seconds (Shorts limit: 60s)
-  target_duration: 30  # ideal duration
-  min_retention_score: 8  # minimum score (0-10) to select a cut (legacy, use min_viral_score)
-  min_viral_score: 8.0  # minimum viral score (0-10) for selection
-  max_cuts_per_video: 5  # maximum number of cuts to extract from analysis
-  max_cuts_to_export: 3  # maximum number of cuts to actually export (best ones)
-  overlap_tolerance: 2  # seconds of allowed overlap between cuts
+  min_duration: 5 # seconds
+  max_duration: 35 # seconds (Shorts limit: 60s)
+  target_duration: 30 # ideal duration
+  min_retention_score: 8 # minimum score (0-10) to select a cut (legacy, use min_viral_score)
+  min_viral_score: 8.0 # minimum viral score (0-10) for selection
+  max_cuts_per_video: 5 # maximum number of cuts to extract from analysis
+  max_cuts_to_export: 3 # maximum number of cuts to actually export (best ones)
+  overlap_tolerance: 2 # seconds of allowed overlap between cuts
 
 # Logging Configuration
 logging:
-  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO" # DEBUG, INFO, WARNING, ERROR, CRITICAL
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   date_format: "%Y-%m-%d %H:%M:%S"
   file_logging: true
@@ -76,6 +94,6 @@ logging:
 # Performance Configuration
 performance:
   use_gpu: true
-  batch_size: 16  # for Whisper processing
-  num_workers: 4  # parallel processing threads
+  batch_size: 16 # for Whisper processing
+  num_workers: 4 # parallel processing threads
   cache_enabled: true
