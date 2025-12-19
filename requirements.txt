@@ -8,6 +8,7 @@ torchaudio>=2.0.0
 
 # AI Analysis
 anthropic>=0.39.0
+openai>=1.0.0
 
 # Video Processing
 ffmpeg-python>=0.2.0

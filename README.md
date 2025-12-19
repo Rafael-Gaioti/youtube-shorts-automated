@@ -103,35 +103,86 @@ GPU: NVIDIA GeForce RTX 4060
 
 ## Uso
 
-### Comando Básico
+### Método 1: Pipeline Completo com Claude API
 
 ```bash
-# Processar um vídeo do YouTube
-python scripts/1_download.py https://www.youtube.com/watch?v=VIDEO_ID
-python scripts/2_transcribe.py
-python scripts/3_analyze.py
-python scripts/4_cut.py
+# Configure primeiro a API key no .env
+# ANTHROPIC_API_KEY=sua_chave_aqui
+
+# Execute o pipeline completo
+python main.py "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+### Método 2: Workflow Híbrido (Recomendado - Sem custo de API)
+
+Este método usa o Claude no browser (gratuito) em vez da API:
+
+**Etapa 1: Download + Transcrição (Automático)**
+```bash
+python main.py "https://www.youtube.com/watch?v=VIDEO_ID" --stages download,transcribe
+```
+
+**Etapa 2: Análise Manual (Claude Browser)**
+```bash
+# Prepara arquivo para copiar no Claude browser
+python scripts/prepare_analysis.py
+
+# Ou especifique o video_id manualmente
+python scripts/prepare_analysis.py ff88SpBpkD0
+```
+
+Isso cria o arquivo `data/analysis/{video_id}_prepared.txt` com:
+- Prompt de análise otimizado
+- Transcrição completa com timestamps
+- Instruções passo a passo
+
+**Passos para análise manual:**
+1. Abra `data/analysis/{video_id}_prepared.txt`
+2. Copie todo o conteúdo (Ctrl+A, Ctrl+C)
+3. Cole no Claude browser (claude.ai)
+4. Copie a resposta JSON do Claude
+5. Salve em `data/analysis/{video_id}_analysis.json`
+
+**Etapa 3: Corte (Automático)**
+```bash
+python scripts/4_cut.py data/raw/{video_id}.mp4
+```
+
+**Etapa 4: Exportação (Automático)**
+```bash
 python scripts/5_export.py
 ```
 
-### Pipeline Completo (em desenvolvimento)
+### Opções do Pipeline
 
 ```bash
-# Executar todo o pipeline de uma vez
-python main.py --url "https://www.youtube.com/watch?v=VIDEO_ID"
+# Executar apenas etapas específicas
+python main.py "URL" --stages download,transcribe
+
+# Resumir de onde parou (detecta checkpoints)
+python main.py "URL" --resume
+
+# Forçar reprocessamento completo
+python main.py "URL" --force
 ```
 
-### Opções Avançadas
+### Comandos Individuais
 
 ```bash
-# Especificar idioma da transcrição
-python scripts/2_transcribe.py --language pt
+# Download apenas
+python scripts/1_download.py "https://www.youtube.com/watch?v=VIDEO_ID"
 
-# Definir número máximo de cortes
-python scripts/3_analyze.py --max-cuts 3
+# Transcrição (processa último vídeo baixado)
+python scripts/2_transcribe.py
 
-# Exportar em resolução diferente
-python scripts/5_export.py --resolution 720x1280
+# Ou especifique o arquivo
+python scripts/2_transcribe.py data/raw/VIDEO_ID.mp4
+
+# Corte de vídeo
+python scripts/4_cut.py data/raw/VIDEO_ID.mp4
+
+# Exportação
+python scripts/5_export.py
 ```
 
 ## Arquitetura do Pipeline
@@ -151,20 +202,21 @@ python scripts/5_export.py --resolution 720x1280
    ├─ Ação: Whisper large-v3 (GPU) + timestamps
    └─ Saída: data/transcripts/{video_id}.json
 
-3. ANÁLISE (3_analyze.py)
+3. ANÁLISE (Manual via Claude Browser ou API)
    ├─ Entrada: data/transcripts/{video_id}.json
-   ├─ Ação: Claude analisa + score de retenção
-   └─ Saída: data/analysis/{video_id}_cuts.json
+   ├─ Ação: Claude analisa + viral score
+   ├─ Helper: prepare_analysis.py (formata para browser)
+   └─ Saída: data/analysis/{video_id}_analysis.json
 
 4. CORTE (4_cut.py)
-   ├─ Entrada: data/analysis/{video_id}_cuts.json
-   ├─ Ação: FFmpeg extrai segmentos
-   └─ Saída: data/output/{video_id}_cut_{n}.mp4
+   ├─ Entrada: data/analysis/{video_id}_analysis.json
+   ├─ Ação: FFmpeg extrai segmentos (copy codec)
+   └─ Saída: data/cuts/{video_id}_cut_{n}.mp4
 
 5. EXPORTAÇÃO (5_export.py)
-   ├─ Entrada: data/output/{video_id}_cut_{n}.mp4
-   ├─ Ação: Conversão para formato Shorts (9:16)
-   └─ Saída: data/output/shorts/{video_id}_short_{n}.mp4
+   ├─ Entrada: data/cuts/{video_id}_cut_{n}.mp4
+   ├─ Ação: Conversão para formato Shorts (9:16, H.264)
+   └─ Saída: data/exports/{video_id}_short_{n}.mp4
 ```
 
 ## Estrutura de Pastas
@@ -178,15 +230,17 @@ youtube-shorts-automated/
 ├── scripts/
 │   ├── 1_download.py          # Download de vídeos
 │   ├── 2_transcribe.py        # Transcrição com Whisper
-│   ├── 3_analyze.py           # Análise com Claude
+│   ├── 3_analyze.py           # Análise com Claude (API)
+│   ├── prepare_analysis.py    # Helper para análise manual
 │   ├── 4_cut.py               # Corte de vídeos
-│   └── 5_export.py            # Exportação final
+│   ├── 5_export.py            # Exportação final
+│   └── check_dependencies.py  # Validador de ambiente
 ├── data/
 │   ├── raw/                   # Vídeos baixados
 │   ├── transcripts/           # Transcrições JSON
-│   ├── analysis/              # Análises da IA
-│   └── output/                # Vídeos processados
-│       └── shorts/            # Shorts finais
+│   ├── analysis/              # Análises da IA + arquivos preparados
+│   ├── cuts/                  # Segmentos cortados
+│   └── exports/               # Shorts finais (9:16)
 ├── models/                    # Modelos Whisper (cache)
 ├── logs/                      # Logs do sistema
 ├── .env                       # Variáveis de ambiente
@@ -197,19 +251,32 @@ youtube-shorts-automated/
 
 ## Custos Estimados
 
-### Por Vídeo (60 minutos)
+### Workflow Híbrido (Recomendado - Claude Browser)
 
-| Serviço | Uso | Custo |
+| Componente | Processamento | Custo |
 |---------|-----|-------|
-| **Whisper** | Local (GPU) | R$ 0,00 |
-| **Claude Sonnet 4** | ~15K tokens input + 4K output | ~R$ 0,30 |
+| **Whisper large-v3** | Local (CPU ou GPU) | R$ 0,00 |
+| **Claude (Browser)** | Manual via claude.ai | R$ 0,00 |
+| **FFmpeg** | Local | R$ 0,00 |
+| **Total** | Por vídeo de qualquer duração | **R$ 0,00** |
+
+**Vantagens:**
+- Custo zero (usa plano gratuito do Claude)
+- Você revisa os cortes antes de processar
+- Controle total sobre a análise
+
+### Workflow Automático (Claude API)
+
+| Componente | Uso por vídeo (60 min) | Custo |
+|---------|-----|-------|
+| **Whisper** | Local (GPU/CPU) | R$ 0,00 |
+| **Claude Sonnet 4 API** | ~15K tokens in + 4K out | ~R$ 0,30 |
 | **FFmpeg** | Local | R$ 0,00 |
 | **Total** | Por vídeo de 1h | **~R$ 0,30** |
 
-### Estimativa Mensal (100 vídeos)
-
+**Estimativa mensal (100 vídeos):**
 - 100 vídeos × R$ 0,30 = **R$ 30,00/mês**
-- Extremamente econômico comparado a soluções comerciais
+- Processamento 100% automático
 
 ## Configuração
 
@@ -231,6 +298,19 @@ O projeto está otimizado para GPUs com 8GB VRAM:
 
 ## Troubleshooting
 
+### Erro: "Could not locate cudnn_ops64_9.dll"
+
+O sistema detectou automaticamente e fez fallback para CPU. Você pode:
+
+**Opção 1: Continuar usando CPU** (funciona perfeitamente, só é mais lento)
+- Nenhuma ação necessária
+- Transcrição de 5min leva ~5-10min
+
+**Opção 2: Instalar cuDNN para acelerar com GPU**
+1. Baixe cuDNN 9 de: https://developer.nvidia.com/cudnn-downloads
+2. Extraia para: `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.x`
+3. Reinicie o pipeline - vai usar GPU automaticamente
+
 ### Erro: CUDA out of memory
 
 Reduza o modelo do Whisper em [config/settings.yaml](config/settings.yaml):
@@ -246,13 +326,24 @@ Verifique se FFmpeg está no PATH:
 ffmpeg -version
 ```
 
-### Erro: API key inválida
+### Erro: Transcrição muito lenta
 
-Verifique se a chave está correta no arquivo `.env`:
+Verifique se está usando GPU:
 ```bash
-cat .env  # Linux/macOS
-type .env  # Windows
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 ```
+
+Se `CUDA: False`, verifique instalação do PyTorch com CUDA:
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+```
+
+### Workflow híbrido: Arquivo analysis.json não encontrado
+
+Certifique-se de:
+1. Executar `python scripts/prepare_analysis.py`
+2. Copiar resposta do Claude browser
+3. Salvar em `data/analysis/{video_id}_analysis.json` (não .txt!)
 
 ## Desenvolvimento
 
