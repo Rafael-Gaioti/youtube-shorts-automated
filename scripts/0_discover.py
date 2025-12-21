@@ -59,15 +59,20 @@ class VideoDiscoverer:
         conn.commit()
         conn.close()
 
-    def fetch_recent_videos(
-        self, channel_url: str, days: int = 7
+    def fetch_top_videos(
+        self, channel_url: str, days: int = 90, limit: int = 50
     ) -> List[Dict[str, Any]]:
-        """Usa yt-dlp para listar vídeos recentes de um canal sem usar API Quota."""
-        logger.info(f"Buscando vídeos recentes de: {channel_url}")
+        """
+        Usa yt-dlp para listar videos de um canal e filtrar pelos com maior view_count (ROI).
+        """
+        logger.info(
+            f"Buscando TOP vídeos (ROI) de: {channel_url} nos últimos {days} dias"
+        )
 
-        # Filtro de data para yt-dlp: vídeos dos últimos 'days'
         date_after = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
 
+        # --flat-playlist é rápido mas nem sempre traz o view_count correto no JSON flat.
+        # Vamos pegar um número maior de itens da playlist para ter base de comparação.
         cmd = [
             "yt-dlp",
             "--quiet",
@@ -77,7 +82,7 @@ class VideoDiscoverer:
             "--dateafter",
             date_after,
             "--playlist-end",
-            "5",  # Pegar apenas os 5 mais recentes
+            str(limit),
             channel_url,
         ]
 
@@ -95,65 +100,81 @@ class VideoDiscoverer:
                     continue
                 video_data = json.loads(line)
 
-                # Ignorar se for Shorts (opcional, mas geralmente queremos vídeos longos para cortes)
-                if (
-                    video_data.get("duration") and video_data["duration"] < 300
-                ):  # < 5 min
+                # Ignorar Shorts e vídeos muito curtos
+                duration = video_data.get("duration")
+                if duration and duration < 300:  # < 5 min
                     continue
+
+                # Alguns provedores flat não dão view_count.
+                # Se não tiver, assume 0 para não quebrar o sort.
+                view_count = video_data.get("view_count", 0) or 0
 
                 videos.append(
                     {
                         "id": video_data["id"],
                         "title": video_data["title"],
                         "url": f"https://www.youtube.com/watch?v={video_data['id']}",
-                        "view_count": video_data.get("view_count", 0),
+                        "view_count": view_count,
                         "channel": video_data.get("channel", "Unknown"),
-                        "duration": video_data.get("duration", 0),
+                        "duration": duration or 0,
                     }
                 )
+
+            # Ordenar por views (Maior primeiro) -> ROI Estratégico
+            videos.sort(key=lambda x: x["view_count"], reverse=True)
+
         except Exception as e:
-            logger.error(f"Falha na descoberta: {e}")
+            logger.error(f"Falha na descoberta ROI: {e}")
 
         return videos
 
-    def get_viral_candidates(self, channels: List[str]) -> List[Dict[str, Any]]:
-        """Filtra vídeos com potencial viral (velocity check)."""
+    def get_viral_candidates(
+        self, channels: List[str], max_per_channel: int = 3
+    ) -> List[Dict[str, Any]]:
+        """Busca os vídeos com melhor performance que ainda não foram processados."""
         candidates = []
         for channel in channels:
-            videos = self.fetch_recent_videos(channel)
-            for v in videos:
+            # Busca os 50 mais recentes dos últimos 3 meses para comparar ROI
+            all_recent = self.fetch_top_videos(channel, days=90, limit=50)
+
+            channel_picks = 0
+            for v in all_recent:
                 if self.is_processed(v["id"]):
                     continue
 
-                # Regra simples de Viralidade: Video com muitas views proporcional ao tempo
-                # Por agora, vamos apenas pegar os novos que não processamos
+                if channel_picks >= max_per_channel:
+                    break
+
                 logger.info(
-                    f"Candidato encontrado: {v['title']} ({v['view_count']} views)"
+                    f"🏆 Top ROI encontrado: {v['title']} ({v['view_count']} views)"
                 )
                 candidates.append(v)
                 self.mark_discovered(v["id"], v["title"], v["channel"])
+                channel_picks += 1
 
         return candidates
 
 
 if __name__ == "__main__":
-    # Exemplo de uso: Canais sugeridos
     target_channels = [
         "https://www.youtube.com/@PrimoCast/videos",
         "https://www.youtube.com/@FlowPodcast/videos",
     ]
 
     discoverer = VideoDiscoverer()
-    new_picks = discoverer.get_viral_candidates(target_channels)
+    # Pega os 3 melhores (mais vistos) de cada canal nos últimos 3 meses que ainda não fizemos
+    new_picks = discoverer.get_viral_candidates(target_channels, max_per_channel=3)
 
     if new_picks:
-        # Salva a fila de descoberta para o próximo passo do pipeline
         queue_path = Path("data/discovery_queue.json")
         queue_path.parent.mkdir(parents=True, exist_ok=True)
 
         current_queue = []
         if queue_path.exists():
-            current_queue = json.loads(queue_path.read_text(encoding="utf-8"))
+            try:
+                current_queue = json.loads(queue_path.read_text(encoding="utf-8"))
+            except:
+                current_queue = []
 
         current_queue.extend(new_picks)
         queue_path.write_text(
@@ -161,7 +182,7 @@ if __name__ == "__main__":
         )
 
         logger.info(
-            f"Sucesso! {len(new_picks)} novos vídeos adicionados à fila em {queue_path}"
+            f"🚀 ROI Update: {len(new_picks)} vídeos de alta performance adicionados à fila."
         )
     else:
-        logger.info("Nenhum vídeo novo com alto potencial encontrado.")
+        logger.info("Nenhum vídeo novo de alta performance encontrado no período.")

@@ -170,29 +170,89 @@ Analise e retorne os {max_cuts} melhores momentos em JSON no formato: {{"cuts": 
             raise
 
     elif ai_provider == "ollama":
+        ollama_cfg = config["ollama_config"]
         try:
-            from openai import OpenAI
+            # Tentar usar a lib oficial OpenAI se disponível
+            try:
+                from openai import OpenAI
 
-            ollama_cfg = config["ollama_config"]
-            client = OpenAI(
-                base_url=ollama_cfg["base_url"],
-                api_key="ollama",  # Ollama não exige chave real, mas o cliente OpenAI pede
-            )
+                client = OpenAI(
+                    base_url=ollama_cfg["base_url"],
+                    api_key="ollama",
+                )
+                using_openai_lib = True
+            except ImportError:
+                # Fallback para requests direto se openai não estiver instalado
+                logger.info(
+                    "Library 'openai' não encontrada. Usando requests HTTP padrão para Ollama."
+                )
+                using_openai_lib = False
+                import requests
+
             logger.info(
                 f"Enviando para Ollama ({ollama_cfg['model']}) em {ollama_cfg['base_url']}..."
             )
 
-            response = client.chat.completions.create(
-                model=ollama_cfg["model"],
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
-                ],
-                temperature=ollama_cfg["temperature"],
-                max_tokens=ollama_cfg["max_tokens"],
-                response_format={"type": "json_object"},
+            if using_openai_lib:
+                response = client.chat.completions.create(
+                    model=ollama_cfg["model"],
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    temperature=ollama_cfg["temperature"],
+                    # max_tokens pode não ser suportado em todas as versões do Ollama
+                    # max_tokens=ollama_cfg["max_tokens"],
+                    response_format={"type": "json_object"},
+                )
+                response_text = response.choices[0].message.content.strip()
+            else:
+                # Implementação via requests raw - Forçando API NATIVA para melhor suporte a JSON
+
+                # Simplificar URL removendo v1 se existir
+                base_url_clean = ollama_cfg["base_url"].replace("/v1", "")
+                if base_url_clean.endswith("/"):
+                    base_url_clean = base_url_clean[:-1]
+
+                api_url = f"{base_url_clean}/api/chat"
+
+                # Payload nativo do Ollama
+                payload = {
+                    "model": ollama_cfg["model"],
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    "temperature": ollama_cfg["temperature"],
+                    "stream": False,
+                    "format": "json",
+                    # Opções avançadas
+                    "options": {
+                        "temperature": ollama_cfg["temperature"],
+                        "num_ctx": 4096,  # Contexto maior
+                    },
+                }
+
+                resp = requests.post(api_url, json=payload)
+                resp.raise_for_status()
+
+                resp_json = resp.json()
+                # API nativa retorna 'message': {'content': ...}
+                if "message" in resp_json:
+                    response_text = resp_json["message"]["content"]
+                elif (
+                    "choices" in resp_json
+                ):  # Caso ainda responda como OpenAI (improvável na rota api/chat)
+                    response_text = resp_json["choices"][0]["message"]["content"]
+                else:
+                    raise ValueError(
+                        f"Resposta desconhecida do Ollama: {resp_json.keys()}"
+                    )
+
+            logger.info(
+                f"Enviando para Ollama ({ollama_cfg['model']}) em {ollama_cfg['base_url']}..."
             )
-            response_text = response.choices[0].message.content.strip()
+
             logger.info("Resposta recebida do Ollama")
 
             # Debug: Salvar resposta bruta
@@ -200,9 +260,8 @@ Analise e retorne os {max_cuts} melhores momentos em JSON no formato: {{"cuts": 
                 f.write(response_text)
 
         except ImportError:
-            logger.error(
-                "Erro: 'openai' library não instalada. Execute 'pip install openai'"
-            )
+            # Caso requests falhe, o que é raro
+            logger.error("Erro critico: nem 'openai' nem 'requests' disponíveis.")
             sys.exit(1)
         except Exception as e:
             logger.error(f"Erro ao conectar com Ollama: {e}")
@@ -291,7 +350,23 @@ Analise e retorne os {max_cuts} melhores momentos em JSON no formato: {{"cuts": 
         # Normalizar para formato consistente
         cuts_list = []
         if isinstance(parsed_data, list):
-            cuts_list = parsed_data
+            # Verificação extra: Será que a lista é uma lista de cortes OU uma lista de objetos contendo "cuts"?
+            found_wrapper = False
+            for item in parsed_data:
+                if isinstance(item, dict):
+                    # Verificar se este item é um wrapper
+                    for key in ["cuts", "result", "segments", "data", "video_cuts"]:
+                        if key in item and isinstance(item[key], list):
+                            logger.info(
+                                f"Encontrada lista de cortes dentro de um objeto na lista (chave: {key})"
+                            )
+                            cuts_list.extend(item[key])
+                            found_wrapper = True
+
+            # Se não achou nenhum wrapper, assume que a própria lista parsed_data é a lista de cortes
+            if not found_wrapper:
+                cuts_list = parsed_data
+
         elif isinstance(parsed_data, dict):
             # Tentar encontrar a lista em chaves comuns
             for key in [

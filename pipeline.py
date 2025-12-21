@@ -94,6 +94,12 @@ def main():
             if not run_script("5_export.py", ["--latest"]):
                 continue
 
+            # ETAPA EXTRA: LIMPEZA DE ESPAÇO
+            raw_video = Path(f"data/raw/{video_id}.mp4")
+            if raw_video.exists():
+                logger.info(f"🧹 Limpando espaço: Deletando vídeo bruto {video_id}.mp4")
+                raw_video.unlink()
+
             logger.info(f"✅ Sucesso total para o vídeo: {video_id}")
             processed_count += 1
 

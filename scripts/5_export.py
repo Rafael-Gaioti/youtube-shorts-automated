@@ -116,19 +116,41 @@ def create_ass_for_cut(
                     group_start = w_start
                     group_duration = w_end - w_start
                 else:
-                    # Critérios para agrupar: duração do grupo < 0.4s ou palavra muito curta
-                    if group_duration < 0.4 or len(w["word"].strip()) <= 3:
+                    # Critérios MELHORADOS para agrupar:
+                    # 1. Duração acumulada < 0.7s (antes era 0.4) = mais tempo de leitura
+                    # 2. OU Comprimento do texto < 15 chars (evita quebrar frases curtas)
+                    # 3. MAS força quebra se passar de 35 chars (evita linhas gigantes)
+
+                    current_text_len = sum(len(x["word"]) + 1 for x in current_group)
+                    gap_to_next = w_start - current_group[-1]["end"]
+
+                    # Se houver pausa grande (>0.5s), quebra o grupo (ponto natural)
+                    force_break = (gap_to_next > 0.5) or (current_text_len > 30)
+
+                    should_group = group_duration < 0.7 or len(w["word"].strip()) <= 3
+
+                    if not force_break and should_group:
                         current_group.append(w)
                         group_duration = w_end - group_start
                     else:
-                        # Fecha grupo atual e começa novo
+                        # ANTES DE FECHAR: Verificar GAP
+                        # Se o gap para a próxima palavra for pequeno (<0.2s), estender o 'end' deste grupo
+                        # para cobrir o buraco e evitar flicker.
+                        last_end = current_group[-1]["end"]
+                        if (w_start - last_end) < 0.2:
+                            # Estender levemente o fim do grupo atual para tocar o próximo
+                            # Mas cuidado para não atropelar
+                            actual_end = w_start
+                        else:
+                            actual_end = last_end
+
                         grouped_words.append(
                             {
                                 "text": " ".join(
                                     [x["word"].strip() for x in current_group]
                                 ).upper(),
                                 "start": group_start,
-                                "end": current_group[-1]["end"],
+                                "end": actual_end,
                             }
                         )
                         current_group = [w]
@@ -160,15 +182,30 @@ def create_ass_for_cut(
             w_midpoint = (gw["start"] + gw["end"]) / 2
             style_name = "Default"
 
+            # Lógica de cor baseada no Speaker ID do segmento
+            # O 'seg' vem do loop externo 'for seg in segments'
+            speaker_id = seg.get("speaker")
+
+            # Default = Amarelo (definido no header ASS)
+            style_name = "Default"
+
+            # Se for SPEAKER_01 ou 2, muda para Ciano (Speaker2)
+            # Ajuste os IDs conforme o que vê no JSON (1 e 2, ou 0 e 1)
+            # No JSON vimos "speaker": 1 e "speaker": 2? Não, vimos "speaker": 1.
+            # Se for 1 -> Amarelo. Se for 2 -> Ciano.
+            if str(speaker_id) in ["2", "SPEAKER_01", "SPEAKER_02"]:
+                style_name = "Speaker2"
+
+            # Se tivermos speakers_data externo (override), usamos com prioridade
             if speakers_data:
-                # Encontrar orador cujo intervalo engloba o ponto médio da fala
                 for s_info in speakers_data:
-                    # Usar uma pequena tolerância (0.1s)
                     if (s_info["start"] - 0.1) <= w_midpoint <= (s_info["end"] + 0.1):
-                        if s_info.get("id") == 2:
+                        # Se o diarization diz que é speaker 2, usamos estilo 2
+                        current_spk = s_info.get("id") or s_info.get("speaker")
+                        if str(current_spk) in ["2", "SPEAKER_01", "SPEAKER_02"]:
                             style_name = "Speaker2"
                         else:
-                            style_name = "Default"  # Garantir volta ao original
+                            style_name = "Default"
                         break
 
             # Efeito Zoom-Pop: inicia em 80% e vai para 100% em 100ms
