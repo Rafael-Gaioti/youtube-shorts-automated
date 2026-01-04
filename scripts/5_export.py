@@ -7,11 +7,17 @@ import sys
 import json
 import logging
 import subprocess
+import argparse
 from pathlib import Path
 from typing import List, Optional
 from datetime import timedelta
 import yaml
 from dotenv import load_dotenv
+import os
+
+# Adicionar o diretório raiz ao path para permitir imports de scripts.*
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from scripts.utils.settings_manager import settings_manager
 
 # Configurar logging
 logging.basicConfig(
@@ -47,6 +53,9 @@ def create_ass_for_cut(
     end_time: float,
     ass_output: Path,
     speakers_data: Optional[List[dict]] = None,
+    primary_color: str = "&H00FFFF",
+    secondary_color: str = "&H00FFFF00",
+    font_size: int = 18,
 ) -> bool:
     """Gera um arquivo ASS com efeito de karaoke (palavra por palavra)."""
     if not transcript_path.exists():
@@ -70,14 +79,33 @@ def create_ass_for_cut(
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Default,Arial Black,90,&H0000FFFF,&H00000000,&H00000000,&H4B000000,-1,0,0,0,100,100,0,0,1,6,2,2,10,10,250,1",
-        "Style: Speaker2,Arial Black,90,&H00FFFF00,&H00000000,&H00000000,&H4B000000,-1,0,0,0,100,100,0,0,1,6,2,2,10,10,150,1",
+        f"Style: Default,Arial Black,{font_size},{primary_color},{secondary_color},&H00000000,&H4B000000,-1,0,0,0,100,100,0,0,1,6,2,2,10,10,250,1",
+        f"Style: Speaker2,Arial Black,{font_size},{secondary_color},{primary_color},&H00000000,&H4B000000,-1,0,0,0,100,100,0,0,1,6,2,2,10,10,150,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
 
     events = []
+
+    # Pré-processamento: Identificar todos os oradores únicos no intervalo do corte
+    unique_speakers_set = set()
+    if speakers_data:
+        for s in speakers_data:
+            sid = s.get("id") or s.get("speaker")
+            if sid:
+                unique_speakers_set.add(sid)
+    else:
+        # Scan segments to find speakers in range
+        for seg in segments:
+            if seg["end"] <= start_time or seg["start"] >= end_time:
+                continue
+            sid = seg.get("speaker")
+            if sid:
+                unique_speakers_set.add(sid)
+
+    unique_speakers_list = sorted(list(unique_speakers_set))
+
     for seg in segments:
         s, e = seg["start"], seg["end"]
 
@@ -182,31 +210,43 @@ def create_ass_for_cut(
             w_midpoint = (gw["start"] + gw["end"]) / 2
             style_name = "Default"
 
-            # Lógica de cor baseada no Speaker ID do segmento
+            # -- Lógica de Estilo Dinâmica baseada nos Oradores do Corte --
+            style_name = "Default"
+
             # O 'seg' vem do loop externo 'for seg in segments'
             speaker_id = seg.get("speaker")
 
-            # Default = Amarelo (definido no header ASS)
-            style_name = "Default"
+            # 1. Determinar quem está falando neste exato momento (word midpoint)
+            current_speaker = speaker_id  # Fallback para o id do segmento
 
-            # Se for SPEAKER_01 ou 2, muda para Ciano (Speaker2)
-            # Ajuste os IDs conforme o que vê no JSON (1 e 2, ou 0 e 1)
-            # No JSON vimos "speaker": 1 e "speaker": 2? Não, vimos "speaker": 1.
-            # Se for 1 -> Amarelo. Se for 2 -> Ciano.
-            if str(speaker_id) in ["2", "SPEAKER_01", "SPEAKER_02"]:
-                style_name = "Speaker2"
-
-            # Se tivermos speakers_data externo (override), usamos com prioridade
             if speakers_data:
                 for s_info in speakers_data:
                     if (s_info["start"] - 0.1) <= w_midpoint <= (s_info["end"] + 0.1):
-                        # Se o diarization diz que é speaker 2, usamos estilo 2
-                        current_spk = s_info.get("id") or s_info.get("speaker")
-                        if str(current_spk) in ["2", "SPEAKER_01", "SPEAKER_02"]:
-                            style_name = "Speaker2"
-                        else:
-                            style_name = "Default"
+                        current_speaker = s_info.get("id") or s_info.get("speaker") or 1
                         break
+
+            # 2. Mapear o ID para um Estilo (0 ou 1)
+            # Usamos a lista pré-calculada unique_speakers_list
+
+            # Se o orador atual estiver na lista, descobre o índice
+            if current_speaker in unique_speakers_list:
+                spk_idx = unique_speakers_list.index(current_speaker)
+                # Alterna entre Default e Speaker2
+                if spk_idx % 2 == 1:
+                    style_name = "Speaker2"
+                else:
+                    style_name = "Default"
+            else:
+                # Fallback, tenta heurística antiga se algo falhou
+                if str(current_speaker) in [
+                    "2",
+                    "3",
+                    "4",
+                    "SPEAKER_01",
+                    "SPEAKER_02",
+                    "SPEAKER_03",
+                ]:
+                    style_name = "Speaker2"
 
             # Efeito Zoom-Pop: inicia em 80% e vai para 100% em 100ms
             animation = "{\\fscx80\\fscy80\\t(0,100,\\fscx100\\fscy100)}"
@@ -228,6 +268,7 @@ def export_to_shorts(
     input_video: Path,
     output_dir: Optional[Path] = None,
     resolution: Optional[str] = None,
+    profile_settings: Optional[dict] = None,
 ) -> Path:
     logger.info(f"--- Exportando para Shorts: {input_video.name} ---")
     """
@@ -271,6 +312,14 @@ def export_to_shorts(
     headline = ""
     ass_path = None
 
+    # Carregar configurações de estilo do perfil SaaS se disponíveis
+    caption_styles = (
+        (profile_settings or {}).get("user_profile", {}).get("caption_styles", {})
+    )
+    primary_color = caption_styles.get("primary_color", "&H00FFFF")
+    secondary_color = caption_styles.get("secondary_color", "&H0000FF")
+    font_size = caption_styles.get("font_size", 18)
+
     if analysis_file.exists():
         try:
             with open(analysis_file, "r", encoding="utf-8") as f:
@@ -296,6 +345,9 @@ def export_to_shorts(
                     cut_data["end"],
                     temp_ass,
                     speakers_info,
+                    primary_color=primary_color,
+                    secondary_color=secondary_color,
+                    font_size=font_size,
                 ):
                     ass_path = temp_ass
                     logger.info("Legendas ASS (Karaoke) geradas com sucesso.")
@@ -393,7 +445,9 @@ def export_to_shorts(
 
 
 def batch_export(
-    input_dir: Optional[Path] = None, output_dir: Optional[Path] = None
+    input_dir: Optional[Path] = None,
+    output_dir: Optional[Path] = None,
+    profile_settings: Optional[dict] = None,
 ) -> List[Path]:
     """
     Exporta todos os vídeos cortados em lote.
@@ -423,7 +477,9 @@ def batch_export(
 
     for video in cut_videos:
         try:
-            output_file = export_to_shorts(video, output_dir)
+            output_file = export_to_shorts(
+                video, output_dir, profile_settings=profile_settings
+            )
             output_files.append(output_file)
         except Exception as e:
             logger.error(f"Erro ao exportar {video.name}: {e}")
@@ -455,41 +511,54 @@ def main():
         except AttributeError:
             pass
 
-    if len(sys.argv) > 1:
-        arg = sys.argv[1]
+    parser = argparse.ArgumentParser(description="Exportação de Shorts.")
+    parser.add_argument("video", nargs="?", help="Caminho para o vídeo")
+    parser.add_argument(
+        "--latest", action="store_true", help="Usa o corte mais recente"
+    )
+    parser.add_argument("--all", action="store_true", help="Exporta todos os cortes")
+    parser.add_argument(
+        "--profile", type=str, default="recommended", help="Perfil do usuário (SaaS)"
+    )
+    args = parser.parse_args()
 
-        if arg == "--latest":
-            logger.info("Buscando corte mais recente...")
-            video_path = find_latest_cut()
-            videos_to_export = [video_path]
-        elif arg == "--all":
-            logger.info("Modo batch: exportando todos os cortes...")
-            try:
-                output_files = batch_export()
-                return
-            except Exception as e:
-                logger.error(f"Erro fatal: {e}", exc_info=True)
-                sys.exit(1)
-        elif arg.endswith(".json"):
-            logger.info(
-                f"Detectado arquivo de análise: {arg}. Extraindo cortes via Batch..."
-            )
-            try:
-                output_files = (
-                    batch_export()
-                )  # batch_export already busca a análise mais recente ou processa todas
-                return
-            except Exception as e:
-                logger.error(f"Erro fatal: {e}", exc_info=True)
-                sys.exit(1)
-        else:
-            video_path = Path(arg)
-            videos_to_export = [video_path]
+    # Carregar configurações do Perfil
+    settings = settings_manager.get_settings(args.profile)
+
+    if args.latest:
+        logger.info("Buscando corte mais recente...")
+        video_path = find_latest_cut()
+        videos_to_export = [video_path]
+    elif args.all:
+        logger.info(
+            f"Modo batch com perfil '{args.profile}': exportando todos os cortes..."
+        )
+        try:
+            output_files = batch_export(profile_settings=settings)
+            return
+        except Exception as e:
+            logger.error(f"Erro fatal: {e}", exc_info=True)
+            sys.exit(1)
+    elif args.video and args.video.endswith(".json"):
+        logger.info(
+            f"Detectado arquivo de análise: {args.video}. Extraindo cortes via Batch..."
+        )
+        try:
+            output_files = batch_export(profile_settings=settings)
+            return
+        except Exception as e:
+            logger.error(f"Erro fatal: {e}", exc_info=True)
+            sys.exit(1)
+    elif args.video:
+        video_path = Path(args.video)
+        videos_to_export = [video_path]
     else:
         # Padrão: exportar todos
-        logger.info("Modo padrão: exportando todos os cortes...")
+        logger.info(
+            f"Modo padrão com perfil '{args.profile}': exportando todos os cortes..."
+        )
         try:
-            output_files = batch_export()
+            output_files = batch_export(profile_settings=settings)
             print(f"\n✓ Exportação concluída!")
             print(f"Total de Shorts criados: {len(output_files)}")
 
@@ -508,8 +577,8 @@ def main():
     # Exportar vídeos individuais
     try:
         for video_path in videos_to_export:
-            logger.info(f"Processando: {video_path}")
-            output_file = export_to_shorts(video_path)
+            logger.info(f"Processando com perfil '{args.profile}': {video_path}")
+            output_file = export_to_shorts(video_path, profile_settings=settings)
 
             size_mb = output_file.stat().st_size / (1024 * 1024)
             print(f"\n✓ Short criado com sucesso!")

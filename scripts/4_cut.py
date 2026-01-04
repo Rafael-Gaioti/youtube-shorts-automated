@@ -7,6 +7,7 @@ import sys
 import json
 import logging
 import subprocess
+import argparse
 from pathlib import Path
 from typing import Dict, List, Optional
 import yaml
@@ -155,11 +156,25 @@ def find_latest_analysis() -> tuple[Path, Path]:
 
 def main():
     """Função principal."""
-    if len(sys.argv) > 2:
-        video_path = Path(sys.argv[1])
-        analysis_path = Path(sys.argv[2])
-    elif len(sys.argv) > 1:
-        analysis_path = Path(sys.argv[1])
+    parser = argparse.ArgumentParser(description="Corte de vídeos virais.")
+    parser.add_argument("video_path", nargs="?", help="Caminho para o vídeo")
+    parser.add_argument("analysis_path", nargs="?", help="Caminho para a análise")
+    parser.add_argument(
+        "--latest", action="store_true", help="Usa a análise mais recente"
+    )
+    parser.add_argument(
+        "--profile", type=str, default="recommended", help="Perfil do usuário (SaaS)"
+    )
+    args = parser.parse_args()
+
+    if args.latest:
+        logger.info("Buscando análise e vídeo mais recentes...")
+        video_path, analysis_path = find_latest_analysis()
+    elif args.video_path and args.analysis_path:
+        video_path = Path(args.video_path)
+        analysis_path = Path(args.analysis_path)
+    elif args.analysis_path:  # Se passou apenas um, assume que é a análise
+        analysis_path = Path(args.analysis_path)
         # Tenta inferir o vídeo a partir da análise
         with open(analysis_path, "r", encoding="utf-8") as f:
             data = json.load(f)

@@ -8,8 +8,14 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, Optional
+import argparse
 import yaml
 from dotenv import load_dotenv
+
+import os
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from scripts.utils.settings_manager import settings_manager
 
 # Configurar logging
 logging.basicConfig(
@@ -70,6 +76,7 @@ def analyze_transcript(
     transcript_path: Path,
     output_dir: Optional[Path] = None,
     max_cuts: Optional[int] = None,
+    profile_settings: Optional[dict] = None,
 ) -> Dict:
     """
     Analisa uma transcrição usando IA (Claude ou OpenAI).
@@ -112,17 +119,44 @@ def analyze_transcript(
     # Montar prompt
     system_prompt = load_prompt()
 
+    # Injetar VIÉS DE ANÁLISE do perfil SaaS
+    analysis_bias = (
+        (profile_settings or {})
+        .get("user_profile", {})
+        .get("analysis_bias", "balanced")
+    )
+    if analysis_bias != "balanced":
+        logger.info(f"🧠 Aplicando viés de análise: {analysis_bias}")
+        bias_instructions = {
+            "funny_moments": "\nPRIORITIZE FUNNY MOMENTS, humor, jokes, and high-energy laughter.",
+            "high_retention_segments": "\nPRIORITIZE HIGH-RETENTION segments, educational insights, and controversial points.",
+            "tech_insights": "\nPRIORITIZE TECHNICAL INSIGHTS, coding tips, and industry trends.",
+        }
+        system_prompt += bias_instructions.get(analysis_bias, "")
+
     # Personalizar prompt se for modelo local (para garantir formato e speaker_map)
     if ai_provider == "ollama":
-        system_prompt += "\n\n### MANDATORY INSTRUCTIONS FOR LLAMA 3:\n"
-        system_prompt += (
-            "1. OUTPUT ONLY JSON. DO NOT INCLUDE ANY TEXT OUTSIDE THE JSON.\n"
-        )
-        system_prompt += "2. USE THESE EXACT ENGLISH KEYS: 'start', 'end', 'viral_score', 'content_type', 'on_screen_text', 'speaker_map'.\n"
-        system_prompt += "3. DO NOT TRANSLATE KEYS TO PORTUGUESE (i.e., use 'start', not 'início' or 'iniciar').\n"
-        system_prompt += "4. 'speaker_map' IS MANDATORY for every segment in the cut.\n"
-        system_prompt += "5. EXAMPLE: {'start': 10.5, 'end': 35.0, 'viral_score': 9, 'on_screen_text': 'TITLE', 'speaker_map': {'L1': 1, 'L2': 2}}\n"
-        system_prompt += "\nResponse must be a single JSON object with a 'cuts' key containing the list of moments.\n"
+        system_prompt += "\n\n### MANDATORY JSON FORMAT FOR LLAMA 3 (STRICT):\n"
+        system_prompt += "You MUST return ONLY a JSON array. No text before or after.\n"
+        system_prompt += "Each object MUST verify the following schema:\n"
+        system_prompt += """
+[
+  {
+    "start": 10.5,
+    "end": 45.2,
+    "duration": 34.7,
+    "viral_score": 8.5,
+    "title": "Titulo Chamativo",
+    "content_type": "success_revelation",
+    "hook": "Primeiros 3s do texto",
+    "cliffhanger": "Ultimos 3s do texto",
+    "emotions": ["curiosity", "inspiration"],
+    "reason": "Explicação do corte",
+    "speaker_map": {"L1": 1, "L2": 1, "L3": 2}
+  }
+]
+"""
+        system_prompt += "\nEnsure 'viral_score' is a float between 0.0 and 10.0.\n"
 
     user_message = f"""Vídeo ID: {transcript_data["video_id"]}
 Duração total: {transcript_data["duration"]:.1f}s
@@ -409,8 +443,12 @@ Analise e retorne os {max_cuts} melhores momentos em JSON no formato: {{"cuts": 
         raise
 
     # Validar e normalizar cada corte
-    min_viral_score = cuts_cfg.get(
-        "min_viral_score", cuts_cfg.get("min_retention_score", 8.0)
+    # Tentar pegar do perfil primeiro -> depois de cuts_cfg -> default 8.0
+    profile_analysis_cfg = (
+        (profile_settings or {}).get("user_profile", {}).get("analysis_config", {})
+    )
+    min_viral_score = profile_analysis_cfg.get(
+        "min_viral_score", cuts_cfg.get("min_viral_score", 8.0)
     )
 
     validated_cuts = []
@@ -427,19 +465,16 @@ Analise e retorne os {max_cuts} melhores momentos em JSON no formato: {{"cuts": 
         elif duration_val == 0 and end_val > start_val:
             duration_val = end_val - start_val
 
+        # 2. Viral Score (Default to 7.0 if missing, to avoid local LLM 0-score issues)
+        score_val = float(cut.get("viral_score", 7.0))
+
         cut["start"] = start_val
         cut["end"] = end_val
         cut["duration"] = duration_val
+        cut["viral_score"] = score_val
 
-        # 2. Score
-        viral_score = cut.get(
-            "viral_score",
-            cut.get(
-                "retention_score",
-                cut.get("score", cut.get("pontuação", cut.get("pontuacao", 0))),
-            ),
-        )
-        cut["viral_score"] = viral_score
+        # 2. Score (Cleaned up redundant logic)
+        viral_score = score_val
 
         # 3. Rationale/Headline
         cut["rationale"] = cut.get(
@@ -515,9 +550,58 @@ Analise e retorne os {max_cuts} melhores momentos em JSON no formato: {{"cuts": 
             except Exception as ex:
                 logger.warning(f"Erro ao converter speaker_map: {ex}")
 
-        # Fallback: Se não houver speakers, criar um único segmento com Speaker 1 cobrindo o corte todo
+        # Fallback: Se não houver speaker_map vindo da LLM, inferir do transcript
         if not speakers_list:
-            speakers_list.append({"start": cut["start"], "end": cut["end"], "id": 1})
+            # Iterar segmentos do transcript para montar a lista de oradores
+            current_speaker_block = None
+
+            for seg in transcript_data["segments"]:
+                # Verificar sobreposição
+                seg_start = seg["start"]
+                seg_end = seg["end"]
+
+                # Se o segmento termina antes do corte começar, ignora
+                if seg_end < cut["start"]:
+                    continue
+                # Se o segmento começa depois do corte terminar, para
+                if seg_start > cut["end"]:
+                    break
+
+                # Segmento relevante (total ou parcial)
+                # Recortar start/end para caber no cut
+                eff_start = max(seg_start, cut["start"])
+                eff_end = min(seg_end, cut["end"])
+
+                if eff_end <= eff_start:
+                    continue
+
+                # Extrair ID do orador (campo 'speaker' do segmento)
+                # Se não existir, tenta extrair da primeira palavra (se houver)
+                speaker_id = seg.get("speaker")
+                if speaker_id is None and seg.get("words"):
+                    speaker_id = seg["words"][0].get("speaker", 1)
+                if speaker_id is None:
+                    speaker_id = 1
+
+                if current_speaker_block and current_speaker_block["id"] == speaker_id:
+                    current_speaker_block["end"] = eff_end
+                else:
+                    if current_speaker_block:
+                        speakers_list.append(current_speaker_block)
+                    current_speaker_block = {
+                        "start": eff_start,
+                        "end": eff_end,
+                        "id": speaker_id,
+                    }
+
+            if current_speaker_block:
+                speakers_list.append(current_speaker_block)
+
+            # Se ainda assim não tiver nada (ex: corte sem segmentos?), ai sim fallback
+            if not speakers_list:
+                speakers_list.append(
+                    {"start": cut["start"], "end": cut["end"], "id": 1}
+                )
 
         cut["speakers"] = speakers_list
 
@@ -613,15 +697,25 @@ def main():
 
             sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
 
-    if len(sys.argv) > 1:
-        transcript_path = Path(sys.argv[1])
+    parser = argparse.ArgumentParser(description="Análise de Conteúdo com IA")
+    parser.add_argument("transcript", nargs="?", help="Caminho para a transcrição")
+    parser.add_argument(
+        "--profile", type=str, default="recommended", help="Perfil do usuário (SaaS)"
+    )
+    args = parser.parse_args()
+
+    # Carregar configurações do Perfil
+    settings = settings_manager.get_settings(args.profile)
+
+    if args.transcript:
+        transcript_path = Path(args.transcript)
     else:
         logger.info("Nenhuma transcrição especificada, buscando a mais recente...")
         transcript_path = find_latest_transcript()
 
     try:
-        logger.info(f"Analisando: {transcript_path}")
-        analysis = analyze_transcript(transcript_path)
+        logger.info(f"Analisando com perfil '{args.profile}': {transcript_path}")
+        analysis = analyze_transcript(transcript_path, profile_settings=settings)
 
         print("\n✓ Análise concluída!")
         print(f"Cortes selecionados: {len(analysis['cuts'])}")

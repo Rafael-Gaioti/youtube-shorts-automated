@@ -76,9 +76,10 @@ def download_video(url: str, output_dir: Optional[Path] = None) -> Path:
 
     download_cfg = config["download_config"]
 
-    yt_dlp_path = get_yt_dlp_path()
     cmd = [
-        yt_dlp_path,
+        sys.executable,
+        "-m",
+        "yt_dlp",
         "-f",
         download_cfg["format"],
         "-o",
@@ -87,13 +88,6 @@ def download_video(url: str, output_dir: Optional[Path] = None) -> Path:
         "mp4",
         url,
     ]
-
-    # Verificar se yt-dlp está disponível
-    if not check_yt_dlp():
-        raise FileNotFoundError(
-            "yt-dlp não encontrado. Instale com: pip install yt-dlp\n"
-            "Ou execute: python scripts/check_dependencies.py"
-        )
 
     logger.info(f"Iniciando download de: {url}")
     logger.info(f"Salvando em: {output_dir}")
@@ -121,13 +115,23 @@ def download_video(url: str, output_dir: Optional[Path] = None) -> Path:
         raise
 
 
+import argparse
+
+
 def main():
     """Função principal."""
-    if len(sys.argv) < 2:
-        print("Uso: python 1_download.py <URL_DO_YOUTUBE>")
+    parser = argparse.ArgumentParser(description="Download de vídeos do YouTube.")
+    parser.add_argument("url", nargs="?", help="URL do vídeo do YouTube")
+    parser.add_argument(
+        "--profile", type=str, default="recommended", help="Perfil do usuário (SaaS)"
+    )
+    args = parser.parse_args()
+
+    if not args.url:
+        print("Uso: python 1_download.py <URL_DO_YOUTUBE> [--profile profile_name]")
         sys.exit(1)
 
-    url = sys.argv[1]
+    url = args.url
 
     try:
         video_path = download_video(url)

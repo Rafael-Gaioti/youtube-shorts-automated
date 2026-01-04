@@ -7,6 +7,7 @@ import sys
 import json
 import time
 import logging
+import argparse
 from pathlib import Path
 from typing import Dict, List, Optional
 import yaml
@@ -16,6 +17,19 @@ import os
 import torch
 import subprocess
 from huggingface_hub import login
+import numpy as np
+
+# Monkey-patch para compatibilidade com NumPy 1.x/2.0 em bibliotecas antigas
+import numpy as np
+
+for attr in ["NaN", "NAN", "Infinity"]:
+    if not hasattr(np, attr):
+        setattr(np, attr, getattr(np, "nan" if "N" in attr else "inf"))
+# Patch adicional no módulo core caso necessário
+if hasattr(np, "core"):
+    for attr in ["NaN", "NAN", "Infinity"]:
+        if not hasattr(np.core, attr):
+            setattr(np.core, attr, getattr(np, "nan" if "N" in attr else "inf"))
 
 # Adicionar o diretório raiz ao path para permitir imports de scripts.*
 sys.path.append(str(Path(__file__).parent.parent))
@@ -38,13 +52,18 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def transcribe_video(video_path: Path, output_dir: Optional[Path] = None) -> Dict:
+def transcribe_video(
+    video_path: Path,
+    output_dir: Optional[Path] = None,
+    min_speakers: Optional[int] = None,
+) -> Dict:
     """
     Transcreve um vídeo usando Whisper.
 
     Args:
         video_path: Caminho para o arquivo de vídeo
         output_dir: Diretório de saída para transcrição (opcional)
+        min_speakers: Número mínimo de oradores (opcional)
 
     Returns:
         Dicionário com a transcrição e metadados
@@ -219,7 +238,12 @@ def transcribe_video(video_path: Path, output_dir: Optional[Path] = None) -> Dic
             )
 
             # Rodar diarização no WAV
-            diarization = pipeline(wav_path)
+            diarization_kwargs = {}
+            if min_speakers:
+                diarization_kwargs["min_speakers"] = min_speakers
+                logger.info(f"Forçando detecção de no mínimo {min_speakers} oradores.")
+
+            diarization = pipeline(wav_path, **diarization_kwargs)
 
             # Cleanup output
             if os.path.exists(wav_path):
@@ -389,20 +413,38 @@ def find_latest_video() -> Path:
 
 def main():
     """Função principal."""
-    if len(sys.argv) > 1:
-        video_path = Path(sys.argv[1])
+    parser = argparse.ArgumentParser(description="Transcrição de vídeos.")
+    parser.add_argument("video_path", nargs="?", help="Caminho para o vídeo")
+    parser.add_argument(
+        "--profile", type=str, default="recommended", help="Perfil do usuário (SaaS)"
+    )
+    parser.add_argument(
+        "--min-speakers",
+        type=int,
+        default=None,
+        help="Número mínimo de oradores (força diarização)",
+    )
+    args = parser.parse_args()
+
+    if args.video_path:
+        video_path = Path(args.video_path)
     else:
         logger.info("Nenhum vídeo especificado, buscando o mais recente...")
         video_path = find_latest_video()
 
     try:
         logger.info(f"Processando: {video_path}")
-        transcript = transcribe_video(video_path)
+        transcript = transcribe_video(video_path, min_speakers=args.min_speakers)
+
+        if isinstance(transcript, dict) and transcript.get("status") == "skipped":
+            print(f"\n⚠️  VÍDEO PULADO: {transcript.get('reason')}")
+            print(f"Confiança da detecção: {transcript.get('confidence', 0):.2f}")
+            sys.exit(0)  # Exit success but it was a skip
 
         print(f"\n✓ Transcrição concluída!")
-        print(f"Segmentos: {len(transcript['segments'])}")
-        print(f"Duração: {transcript['duration']:.2f}s")
-        print(f"Idioma: {transcript['language']}")
+        print(f"Segmentos: {len(transcript.get('segments', []))}")
+        print(f"Duração: {transcript.get('duration', 0):.2f}s")
+        print(f"Idioma: {transcript.get('language', 'unknown')}")
         print(f"\nPróximo passo: python scripts/3_analyze.py")
 
     except Exception as e:

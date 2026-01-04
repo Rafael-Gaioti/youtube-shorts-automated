@@ -8,6 +8,12 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
 # Configuração de Logging
+import argparse
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from scripts.utils.settings_manager import settings_manager
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
@@ -60,11 +66,16 @@ class VideoDiscoverer:
         conn.close()
 
     def fetch_top_videos(
-        self, channel_url: str, days: int = 90, limit: int = 50
+        self,
+        channel_url: str,
+        days: int = 90,
+        limit: int = 50,
+        discovery_rules: dict = None,
     ) -> List[Dict[str, Any]]:
         """
         Usa yt-dlp para listar videos de um canal e filtrar pelos com maior view_count (ROI).
         """
+        discovery_rules = discovery_rules or {}
         logger.info(
             f"Buscando TOP vídeos (ROI) de: {channel_url} nos últimos {days} dias"
         )
@@ -73,8 +84,11 @@ class VideoDiscoverer:
 
         # --flat-playlist é rápido mas nem sempre traz o view_count correto no JSON flat.
         # Vamos pegar um número maior de itens da playlist para ter base de comparação.
+        # Vamos pegar um número maior de itens da playlist para ter base de comparação.
         cmd = [
-            "yt-dlp",
+            sys.executable,
+            "-m",
+            "yt_dlp",
             "--quiet",
             "--no-warnings",
             "--print-json",
@@ -100,9 +114,12 @@ class VideoDiscoverer:
                     continue
                 video_data = json.loads(line)
 
-                # Ignorar Shorts e vídeos muito curtos
-                duration = video_data.get("duration")
-                if duration and duration < 300:  # < 5 min
+                # Ignorar Shorts e vídeos muito longos conforme regras do perfil
+                min_dur = discovery_rules.get("min_duration_sec", 300)
+                max_dur = discovery_rules.get("max_duration_sec", 1800)
+
+                duration = video_data.get("duration", 0)
+                if duration and (duration < min_dur or duration > max_dur):
                     continue
 
                 # Alguns provedores flat não dão view_count.
@@ -129,13 +146,18 @@ class VideoDiscoverer:
         return videos
 
     def get_viral_candidates(
-        self, channels: List[str], max_per_channel: int = 3
+        self,
+        channels: List[str],
+        max_per_channel: int = 3,
+        discovery_rules: dict = None,
     ) -> List[Dict[str, Any]]:
         """Busca os vídeos com melhor performance que ainda não foram processados."""
         candidates = []
         for channel in channels:
             # Busca os 50 mais recentes dos últimos 3 meses para comparar ROI
-            all_recent = self.fetch_top_videos(channel, days=90, limit=50)
+            all_recent = self.fetch_top_videos(
+                channel, days=90, limit=50, discovery_rules=discovery_rules
+            )
 
             channel_picks = 0
             for v in all_recent:
@@ -156,14 +178,52 @@ class VideoDiscoverer:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Discovery de vídeos virais.")
+    parser.add_argument(
+        "--profile", type=str, default="recommended", help="Perfil do usuário (SaaS)"
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Limite total de vídeos a descobrir"
+    )
+    parser.add_argument(
+        "--max-duration",
+        type=int,
+        default=None,
+        help="Duração máxima em MINUTOS (override)",
+    )
+    args = parser.parse_args()
+
+    # Configuração de Logs
+    # The global logging.basicConfig is already set up.
+    # We can just get a logger specific to this script's main execution.
+    logger = logging.getLogger("DISCOVER")
+
+    # Carregar Profile
+    # settings_manager is already imported as an instance.
+    settings = settings_manager.get_settings(args.profile)
+    discovery_rules = settings.get("user_profile", {}).get("discovery_rules", {})
+
+    # Override de duração via CLI (útil para testes rápidos)
+    if args.max_duration:
+        max_duration_sec = args.max_duration * 60
+        logger.info(
+            f"Override de Duração: Limitando a {args.max_duration} min ({max_duration_sec}s)"
+        )
+        discovery_rules["max_duration_sec"] = max_duration_sec
+
     target_channels = [
         "https://www.youtube.com/@PrimoCast/videos",
         "https://www.youtube.com/@FlowPodcast/videos",
     ]
 
     discoverer = VideoDiscoverer()
-    # Pega os 3 melhores (mais vistos) de cada canal nos últimos 3 meses que ainda não fizemos
-    new_picks = discoverer.get_viral_candidates(target_channels, max_per_channel=3)
+    # Pega mais vídeos do que o limite para garantir diversidade, depois aplicamos o limite global
+    new_picks = discoverer.get_viral_candidates(
+        target_channels, max_per_channel=3, discovery_rules=discovery_rules
+    )
+
+    if args.limit:
+        new_picks = new_picks[: args.limit]
 
     if new_picks:
         queue_path = Path("data/discovery_queue.json")
