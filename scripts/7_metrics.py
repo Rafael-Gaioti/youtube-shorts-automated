@@ -1,28 +1,25 @@
 """
-7_metrics.py — Coleta métricas dos Shorts publicados via YouTube Analytics API
+7_metrics.py — Coleta automática de métricas do YouTube e YouTube Analytics
 
 Uso:
-    python scripts/7_metrics.py                        # todos os uploads registrados
-    python scripts/7_metrics.py --video-id y9hwhoB9XTI # vídeo específico
-    python scripts/7_metrics.py --report               # gera relatório de correlação
+    python scripts/7_metrics.py [video_id]
 
-Requer que os vídeos já tenham sido publicados com 6_upload.py.
-Token OAuth2 salvo em config/youtube_token.json é reaproveitado.
+Este script lê os registros na pasta data/uploads/ e consulta:
+1. YouTube Data API v3 (Views, Likes, Comments)
+2. YouTube Analytics API (Retenção, Duração Média da Visualização)
+   Nota: A API de Analytics costuma ter delay de 24-48 horas.
 """
 
 import argparse
 import json
 import logging
+import os
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
-
+# Google API
 try:
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
@@ -31,334 +28,269 @@ try:
     from googleapiclient.errors import HttpError
 except ImportError:
     print(
-        "❌ Dependências do Google não instaladas.\n"
+        "❌ Dependências do Google não instaladas.\\n"
         "   Execute: pip install google-api-python-client google-auth-oauthlib google-auth-httplib2"
     )
     sys.exit(1)
 
-# Scopes: leitura de dados do canal + analytics
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# Os mesmos escopos definidos no 6_upload.py (Data API + Analytics API)
 SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
+
+CLIENT_SECRETS_PATH = Path("client_secrets.json")
 TOKEN_PATH = Path("config/youtube_token.json")
-TOKEN_METRICS_PATH = Path("config/youtube_metrics_token.json")
-
-
-def get_service(scope_token_path: Path, scopes: list):
-    """Autentica e retorna o serviço Google. Reaproveita token se disponível."""
-    creds = None
-
-    if scope_token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(scope_token_path), scopes)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            # Buscar client_secrets
-            secrets = _find_client_secrets()
-            if not secrets:
-                logger.error("client_secrets.json não encontrado.")
-                sys.exit(1)
-            logger.info(
-                "Iniciando autenticação OAuth2 para métricas — o browser será aberto..."
-            )
-            flow = InstalledAppFlow.from_client_secrets_file(str(secrets), scopes)
-            creds = flow.run_local_server(port=0)
-
-        scope_token_path.parent.mkdir(exist_ok=True)
-        with open(scope_token_path, "w") as f:
-            f.write(creds.to_json())
-        logger.info(f"Token salvo em: {scope_token_path}")
-
-    return creds
 
 
 def _find_client_secrets() -> Path | None:
-    if Path("client_secrets.json").exists():
-        return Path("client_secrets.json")
+    if CLIENT_SECRETS_PATH.exists():
+        return CLIENT_SECRETS_PATH
     candidates = list(Path(".").glob("client_secret_*.json"))
-    return candidates[0] if candidates else None
+    if candidates:
+        return candidates[0]
+    return None
 
 
-def fetch_video_stats(youtube, youtube_video_id: str) -> dict | None:
-    """
-    Busca estatísticas básicas do vídeo via YouTube Data API v3.
-    Retorna views, likes, comments do snippet statistics.
-    """
-    try:
-        resp = (
-            youtube.videos()
-            .list(
-                part="statistics,contentDetails",
-                id=youtube_video_id,
-            )
-            .execute()
+def get_authenticated_services():
+    """Retorna os serviços youtube (v3) e youtubeAnalytics (v2)."""
+    creds = None
+    secrets_path = _find_client_secrets()
+    if not secrets_path:
+        logger.error(
+            "❌ client_secrets.json não encontrado.\\n"
+            "   Baixe as credenciais OAuth2 do Google Cloud Console e coloque na raiz do projeto."
         )
+        sys.exit(1)
 
-        items = resp.get("items", [])
-        if not items:
-            logger.warning(f"Vídeo não encontrado: {youtube_video_id}")
-            return None
+    TOKEN_PATH.parent.mkdir(exist_ok=True)
+    if TOKEN_PATH.exists():
+        creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
 
-        stats = items[0].get("statistics", {})
-        details = items[0].get("contentDetails", {})
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            logger.info("Token expirado. Renovando...")
+            try:
+                creds.refresh(Request())
+            except Exception as e:
+                logger.warning(
+                    f"Falha ao renovar token (possível mudança de escopos): {e}"
+                )
+                logger.info("Forçando re-autenticação...")
+                creds = None
 
-        return {
-            "youtube_video_id": youtube_video_id,
-            "views": int(stats.get("viewCount", 0)),
-            "likes": int(stats.get("likeCount", 0)),
-            "comments": int(stats.get("commentCount", 0)),
-            "duration": details.get("duration", ""),
-            "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        }
+        if not creds:
+            logger.info("Iniciando autenticação OAuth2 — o browser será aberto...")
+            flow = InstalledAppFlow.from_client_secrets_file(str(secrets_path), SCOPES)
+            creds = flow.run_local_server(port=0)
 
-    except HttpError as e:
-        logger.error(f"Erro ao buscar stats de {youtube_video_id}: {e}")
-        return None
+        with open(TOKEN_PATH, "w") as f:
+            f.write(creds.to_json())
+            logger.info(f"Token salvo em: {TOKEN_PATH}")
 
+    youtube_service = build("youtube", "v3", credentials=creds)
+    analytics_service = build("youtubeAnalytics", "v2", credentials=creds)
 
-def fetch_analytics(analytics, youtube_video_id: str, days: int = 28) -> dict | None:
-    """
-    Busca métricas de retenção via YouTube Analytics API.
-    Requer scope yt-analytics.readonly.
-    """
-    from datetime import datetime, timedelta
-
-    end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-
-    try:
-        resp = (
-            analytics.reports()
-            .query(
-                ids="channel==MINE",
-                startDate=start_date,
-                endDate=end_date,
-                metrics="views,averageViewDuration,averageViewPercentage,likes,comments",
-                dimensions="video",
-                filters=f"video=={youtube_video_id}",
-            )
-            .execute()
-        )
-
-        rows = resp.get("rows", [])
-        if not rows:
-            logger.warning(
-                f"Sem dados analytics para {youtube_video_id} nos últimos {days} dias."
-            )
-            return None
-
-        row = rows[0]
-        return {
-            "youtube_video_id": youtube_video_id,
-            "period_days": days,
-            "views": int(row[1]),
-            "avg_view_duration_s": round(float(row[2]), 1),
-            "avg_view_percentage": round(float(row[3]), 1),
-            "likes": int(row[4]),
-            "comments": int(row[5]),
-            "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        }
-
-    except HttpError as e:
-        logger.error(f"Erro ao buscar analytics de {youtube_video_id}: {e}")
-        return None
+    return youtube_service, analytics_service
 
 
-def save_metrics(video_id: str, youtube_video_id: str, metrics: dict):
-    """Salva métricas em data/metrics/{video_id}_{youtube_video_id}_metrics.json."""
-    metrics_dir = Path("data/metrics")
-    metrics_dir.mkdir(parents=True, exist_ok=True)
-    path = metrics_dir / f"{video_id}_{youtube_video_id}_metrics.json"
+def fetch_basic_stats(youtube, video_ids: list[str]) -> dict:
+    """Busca viewCount, likeCount, commentCount usando a Data API."""
+    stats = {}
+    if not video_ids:
+        return stats
 
-    # Carregar histórico ou criar novo
-    history = []
-    if path.exists():
-        with open(path, "r", encoding="utf-8") as f:
-            history = json.load(f)
+    # A API aceita até 50 IDs por vez
+    chunk_size = 50
+    for i in range(0, len(video_ids), chunk_size):
+        chunk = video_ids[i : i + chunk_size]
+        try:
+            request = youtube.videos().list(part="statistics", id=",".join(chunk))
+            response = request.execute()
 
-    history.append(metrics)
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(history, f, ensure_ascii=False, indent=2)
-
-    logger.info(f"   Métricas salvas em: {path}")
-    return path
-
-
-def generate_report(uploads_dir: Path = Path("data/uploads")):
-    """
-    Gera relatório de correlação entre campos de análise e performance real.
-    Lê todos os uploads + métricas e salva em data/reports/performance_report.json.
-    """
-    metrics_dir = Path("data/metrics")
-    reports_dir = Path("data/reports")
-    reports_dir.mkdir(parents=True, exist_ok=True)
-
-    rows = []
-
-    for uploads_file in uploads_dir.glob("*_uploads.json"):
-        video_id = uploads_file.stem.replace("_uploads", "")
-        with open(uploads_file, "r", encoding="utf-8") as f:
-            uploads = json.load(f)
-
-        for upload in uploads:
-            yt_id = upload.get("youtube_video_id")
-            if not yt_id or yt_id == "DRY_RUN":
-                continue
-
-            # Buscar métricas salvas
-            metrics_files = list(metrics_dir.glob(f"{video_id}_{yt_id}_metrics.json"))
-            if not metrics_files:
-                continue
-
-            with open(metrics_files[0], "r", encoding="utf-8") as f:
-                history = json.load(f)
-
-            latest = history[-1] if history else {}
-
-            rows.append(
-                {
-                    "video_id": video_id,
-                    "youtube_video_id": yt_id,
-                    "youtube_url": upload.get("youtube_url"),
-                    "title": upload.get("title"),
-                    "uploaded_at": upload.get("uploaded_at"),
-                    # Campos de análise IA
-                    "viral_score": upload.get("viral_score"),
-                    "hook_strength": upload.get("hook_strength"),
-                    "opening_pattern": upload.get("opening_pattern"),
-                    # Performance real
-                    "views": latest.get("views"),
-                    "avg_view_duration_s": latest.get("avg_view_duration_s"),
-                    "avg_view_percentage": latest.get("avg_view_percentage"),
-                    "likes": latest.get("likes"),
-                    "comments": latest.get("comments"),
-                    "period_days": latest.get("period_days"),
-                    "metrics_at": latest.get("fetched_at"),
+            for item in response.get("items", []):
+                vid = item["id"]
+                s = item.get("statistics", {})
+                stats[vid] = {
+                    "views": int(s.get("viewCount", 0)),
+                    "likes": int(s.get("likeCount", 0)),
+                    "comments": int(s.get("commentCount", 0)),
                 }
+        except HttpError as e:
+            logger.error(f"Erro ao buscar stats básicas: {e}")
+
+    return stats
+
+
+def fetch_retention_stats(analytics, video_id: str) -> dict:
+    """Busca métricas de retenção via Analytics API. Espera-se delay de 24-48h no YouTube."""
+    stats = {"averageViewDuration": None, "averageViewPercentage": None}
+
+    try:
+        # Analytics API requer range de datas. Buscar dos últimos 30 dias.
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+        request = analytics.reports().query(
+            ids="channel==MINE",
+            startDate=start_date,
+            endDate=end_date,
+            metrics="averageViewDuration,averageViewPercentage",
+            filters=f"video=={video_id}",
+        )
+        response = request.execute()
+
+        # O formato da resposta é uma lista de colunas ['averageViewDuration', 'averageViewPercentage']
+        # e uma lista vazia de `rows` se não houver dados ainda.
+        if "rows" in response and response["rows"]:
+            row = response["rows"][0]
+            stats["averageViewDuration"] = float(row[0]) if len(row) > 0 else None
+            stats["averageViewPercentage"] = float(row[1]) if len(row) > 1 else None
+
+    except HttpError as e:
+        # Erro comum: o vídeo é muito novo e o Analytics não consolidou
+        if e.resp.status == 400 and "Invalid data provided" in str(e):
+            logger.debug(
+                f"[{video_id}] Analytics não disponível ainda (Delay 24h-48h)."
             )
+        else:
+            logger.error(f"Erro ao buscar analytics para {video_id}: {e}")
 
-    report_path = reports_dir / "performance_report.json"
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(rows, f, ensure_ascii=False, indent=2)
+    return stats
 
-    logger.info(f"\n{'=' * 55}")
-    logger.info(f"  RELATÓRIO GERADO: {report_path}")
-    logger.info(f"  Total de shorts com dados: {len(rows)}")
-    if rows:
-        logger.info(f"\n  Top 5 por views:")
-        for r in sorted(rows, key=lambda x: x.get("views") or 0, reverse=True)[:5]:
-            logger.info(
-                f"  [{r.get('views', '?')} views] "
-                f"viral={r.get('viral_score', '?')} "
-                f"hook={r.get('hook_strength', '?')} "
-                f"ret={r.get('avg_view_percentage', '?')}% "
-                f"— {r.get('title', '')[:40]}"
-            )
-    logger.info(f"{'=' * 55}")
 
-    return report_path
+def process_video_metrics(
+    youtube, analytics, video_id: str, upload_records: list
+) -> list:
+    """Consolida as métricas para todos os shorts processados a partir do vídeo fonte."""
+
+    yt_video_ids = [
+        r["youtube_video_id"]
+        for r in upload_records
+        if "youtube_video_id" in r and r["youtube_video_id"] != "DRY_RUN"
+    ]
+
+    if not yt_video_ids:
+        logger.info(
+            f"[{video_id}] Nenhum short real encontrado (apenas DRY_RUN ou falhas). Ignorando."
+        )
+        return []
+
+    logger.info(f"[{video_id}] Buscando Data API para {len(yt_video_ids)} shorts...")
+    basic_stats = fetch_basic_stats(youtube, yt_video_ids)
+
+    final_metrics = []
+
+    for record in upload_records:
+        vid = record.get("youtube_video_id")
+        if not vid or vid == "DRY_RUN":
+            continue
+
+        b_stats = basic_stats.get(vid, {"views": 0, "likes": 0, "comments": 0})
+
+        # Só vale a pena gastar request do Analytics se tiver view (para economizar cota e tempo)
+        r_stats = {"averageViewDuration": None, "averageViewPercentage": None}
+        if b_stats["views"] > 0:
+            logger.info(f"[{video_id} -> {vid}] Buscando Analytics API...")
+            r_stats = fetch_retention_stats(analytics, vid)
+        else:
+            logger.info(f"[{video_id} -> {vid}] 0 views, pulando Analytics API.")
+
+        metrics_record = {
+            "source_video_id": video_id,
+            "cut_index": record["cut_index"],
+            "youtube_video_id": vid,
+            "youtube_url": record.get("youtube_url"),
+            "uploaded_at": record.get("uploaded_at"),
+            "metrics_updated_at": datetime.now().isoformat(),
+            # IA Metadata para cruzamento no 8_correlate.py
+            "viral_score": record.get("viral_score"),
+            "hook_strength": record.get("hook_strength"),
+            "opening_pattern": record.get("opening_pattern"),
+            # YouTube Stats
+            "views": b_stats["views"],
+            "likes": b_stats["likes"],
+            "comments": b_stats["comments"],
+            "averageViewDuration": r_stats["averageViewDuration"],
+            "averageViewPercentage": r_stats["averageViewPercentage"],
+        }
+
+        final_metrics.append(metrics_record)
+
+    return final_metrics
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Coleta métricas dos Shorts publicados"
-    )
+    parser = argparse.ArgumentParser(description="Coleta de Métricas do YouTube Shorts")
     parser.add_argument(
-        "--video-id",
+        "video_id",
         type=str,
-        default=None,
-        help="video_id do projeto (y9hwhoB9XTI). Padrão: todos os uploads registrados.",
-    )
-    parser.add_argument(
-        "--days",
-        type=int,
-        default=28,
-        help="Período de métricas analytics em dias (padrão: 28)",
-    )
-    parser.add_argument(
-        "--report",
-        action="store_true",
-        help="Gerar relatório de correlação IA x performance real",
-    )
-    parser.add_argument(
-        "--stats-only",
-        action="store_true",
-        help="Buscar apenas views/likes/comments (sem analytics de retenção)",
+        nargs="?",
+        help="ID do vídeo fonte original (opcional — usa todos em data/uploads se omitido)",
     )
     args = parser.parse_args()
 
-    # Coletar uploads a processar
     uploads_dir = Path("data/uploads")
     if not uploads_dir.exists():
-        logger.error(
-            "Nenhum upload registrado em data/uploads/. Execute 6_upload.py primeiro."
-        )
+        logger.error("Pasta data/uploads/ não encontrada. Rode o 6_upload.py primeiro.")
         sys.exit(1)
 
+    # Identificar quais arquivos processar
+    files_to_process = []
     if args.video_id:
-        upload_files = list(uploads_dir.glob(f"{args.video_id}_uploads.json"))
+        target_file = uploads_dir / f"{args.video_id}_uploads.json"
+        if target_file.exists():
+            files_to_process.append(target_file)
+        else:
+            logger.error(f"Arquivo não encontrado: {target_file}")
+            sys.exit(1)
     else:
-        upload_files = list(uploads_dir.glob("*_uploads.json"))
+        files_to_process = list(uploads_dir.glob("*_uploads.json"))
+        if not files_to_process:
+            logger.info("Nenhum arquivo de upload encontrado.")
+            sys.exit(0)
 
-    if not upload_files:
-        logger.error("Nenhum arquivo de uploads encontrado.")
-        sys.exit(1)
+    # Autenticar apenas se tiver arquivos reais para processar
+    youtube, analytics = get_authenticated_services()
 
-    # Autenticar
-    creds = get_service(TOKEN_METRICS_PATH, SCOPES)
-    youtube = build("youtube", "v3", credentials=creds)
-    analytics = None
-    if not args.stats_only:
-        analytics = build("youtubeAnalytics", "v2", credentials=creds)
+    metrics_dir = Path("data/metrics")
+    metrics_dir.mkdir(parents=True, exist_ok=True)
 
-    total_fetched = 0
+    total_processed = 0
 
-    for uploads_file in upload_files:
-        video_id = uploads_file.stem.replace("_uploads", "")
-        with open(uploads_file, "r", encoding="utf-8") as f:
-            uploads = json.load(f)
+    for upload_file in files_to_process:
+        source_video_id = upload_file.name.replace("_uploads.json", "")
 
-        logger.info(f"\n--- {video_id} ({len(uploads)} short(s)) ---")
+        with open(upload_file, "r", encoding="utf-8") as f:
+            records = json.load(f)
 
-        for upload in uploads:
-            yt_id = upload.get("youtube_video_id")
-            if not yt_id or yt_id == "DRY_RUN":
-                continue
+        logger.info(f"\\n{'=' * 55}")
+        logger.info(f" Processando métricas para: {source_video_id}")
+        logger.info(f"{'=' * 55}")
 
-            logger.info(f"  📊 {yt_id}")
+        metrics = process_video_metrics(youtube, analytics, source_video_id, records)
 
-            # Stats básicas (views, likes, comments)
-            stats = fetch_video_stats(youtube, yt_id)
-            if not stats:
-                continue
+        if metrics:
+            # Salvar no arquivo de métricas
+            output_file = metrics_dir / f"{source_video_id}_metrics.json"
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(metrics, f, ensure_ascii=False, indent=2)
 
-            logger.info(
-                f"     Views: {stats['views']} | Likes: {stats['likes']} | Comments: {stats['comments']}"
-            )
+            logger.info(f"✅ Métricas atualizadas e salvas em {output_file.name}")
+            for m in metrics:
+                logger.info(
+                    f"   [{m['youtube_video_id']}] Views: {m['views']} | V.Score: {m['viral_score']} | Retenção (segi): {m['averageViewDuration']}"
+                )
+            total_processed += len(metrics)
 
-            # Analytics de retenção
-            if not args.stats_only and analytics:
-                anal = fetch_analytics(analytics, yt_id, days=args.days)
-                if anal:
-                    stats.update(anal)
-                    logger.info(
-                        f"     Retenção: {anal.get('avg_view_percentage', '?')}% "
-                        f"| Duração média: {anal.get('avg_view_duration_s', '?')}s"
-                    )
-
-            save_metrics(video_id, yt_id, stats)
-            total_fetched += 1
-
-    logger.info(f"\n{'=' * 55}")
-    logger.info(f"  Métricas coletadas: {total_fetched} short(s)")
-    logger.info(f"{'=' * 55}")
-
-    if args.report:
-        generate_report(uploads_dir)
+    logger.info(f"\\nResumo: {total_processed} shorts atualizados com sucesso.")
 
 
 if __name__ == "__main__":

@@ -39,8 +39,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Scopes necessários para upload
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+# Scopes necessários para upload e leitura de métricas (Data API + Analytics API)
+SCOPES = [
+    "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
+]
 
 # Caminho padrão para os arquivos de autenticação
 CLIENT_SECRETS_PATH = Path("client_secrets.json")
