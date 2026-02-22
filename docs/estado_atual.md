@@ -92,6 +92,15 @@ Download → Transcrição → Análise → Corte → Export → Upload
 - **On Screen Text (Título Flutuante)**: Design moderno de criador usando Bordas (Outline=4) e Sombra Direcional (Shadow=6) robustos.
 - Arquivos temp `.ass` são limpos automaticamente após export
 
+### Auditoria de Design (Design Auditor) e Auto-Fix
+
+O projeto conta com um `design_auditor.py` acoplado ao `5_export.py`, atuando como um rigoroso gatekeeper de qualidade visual, agora **totalmente algorítmico** (sem custos de LLM):
+
+- **Análise Multicamadas**: O auditor pontua ritmo (motion energy), aderência do hook, e **Colisões Gráficas** (Textos vazando da Safe-Zone).
+- **MediaPipe Integrado**: Avalia poses do rosto e score da área de texto na thumbnail gerada para as pontuações do OpenCV.
+- **Auto-Fix (Auto-Correção)**: Se o auditor detectar textos mal dimensionados (tanto no vídeo quanto na thumbnail), o `5_export.py` aciona um loop automático de até 3 tentativas, redesenhando as mídias com fontes proporcionalmente reduzidas (steps de -15%) de forma paralela até a aprovação.
+- Hard-Fails cirúrgicos atrelados diretamente a métricas como `headline_score` previnem vídeos defeituosos de avançarem para a nuvem.
+
 ### Configuração
 
 - Perfis em `config/user_profiles.json`: `recommended`, `custom_test`

@@ -33,8 +33,10 @@ YouTube URL (--url) ou arquivo com URLs (--urls-file)
 ┌──────────────────────────┐
 │  5_export.py             │  FFmpeg  →  data/shorts/{id}_cut_0X_short.mp4
 │  - scale + crop 9:16     │  (temp .ass gerado e deletado após uso)
-│  - ASS subtitles karaoke │
+│  - ASS subtitles karaoke │  + .audit.json via Design Auditor
 │  - headline drawtext     │
+│  - Design Auditor (Alg)  │  <- Avalia Colisões/Ritmo/Legendas
+│  - Auto-Fix Typography   │  <- Reduz fonte paralelamente em erros
 └──────────────────────────┘
           │
           ▼
