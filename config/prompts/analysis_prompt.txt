@@ -32,15 +32,19 @@ REJEIÇÃO:
 6. **IDENTIFICAÇÃO DE ORADOR (Obrigatório)**: Para cada linha (L0, L1...) do corte, atribua o ID do orador (1 ou 2), garantindo consistência semântica e evitando trocas desnecessárias de ID se o raciocínio é da mesma pessoa. Use o `speaker_map`.
 
 📋 **YOUTUBE_TITLE E TEMPLATES RÍGIDOS:**
-Crie obrigatoriamente um campo `youtube_title` (máx. 8 palavras) usando APENAS um destes 3 templates exatos:
-1. **Contraste:** "Pare de fazer X — faça Y" ou "Não faça X, faça Y"
-2. **Curiosidade Acionável:** "O único hábito que X usam todo dia" ou "A regra número 1 para X"
-3. **Problema Real:** "Se você não faz X, sua rotina trava" ou "O erro invisível que destrói sua produtividade"
+Crie obrigatoriamente um campo `youtube_title` (máx. 8 palavras).
+⚠️ REGRAS DE OURO DO TÍTULO:
+- **TEM QUE TER**: Um verbo de ação + uma consequência/benefício claro + tensão explícita.
+- **PROIBIDO**: Termos abstratos ("Segredo", "Verdade", "Mito"), adjetivos soltos, ou títulos de uma só palavra.
+- Use APENAS um destes 3 templates psicológicos exatos:
+1. **Contraste Agressivo:** "Pare de [Ação Ruim] — faça [Ação Boa]" ou "O erro que faz você [Dor]"
+2. **Curiosidade Direta:** "A regra número 1 para [Benefício Final]" ou "Como [Referência de Sucesso] pensa"
+3. **Dor Imediata:** "Se você faz [Erro Comum], vai [Pior Consequência]"
 
 🎯 **THUMBNAIL_HOOK (REGRAS CRÍTICAS):**
-- MÁXIMO 4 PALAVRAS.
-- Use palavras de "Impacto Visual" (ex: "ERRO FATAL", "MÉTODO SECRETO", "FAÇA ISSO").
-- Deve ser um complemento ao YouTube Title, não uma repetição.
+- MÁXIMO 4 PALAVRAS. Letras Maiúsculas.
+- Use palavras de **Micro-Choque Cognitivo** (ex: "ERRO FATAL", "VAI FALIR", "PARE AGORA").
+- Ele DEVE complementar a tensão do YouTube Title, e NUNCA ser o mesmo texto.
 
 FORMATO DE SAÍDA (JSON válido):
 

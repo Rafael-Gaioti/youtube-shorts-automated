@@ -690,6 +690,22 @@ Selecione os {max_cuts} melhores momentos. IMPORTANTE: cada corte deve ter entre
 
         cut["speakers"] = speakers_list
 
+        # --- NOVA CAMADA: Title Validator (Strategy B / Post-Generation) ---
+        from scripts.tools.title_validator import validate_and_improve_title
+
+        # Extrair um contexto aproximado do transcript para ajudar o validator
+        transcript_context = "\n".join(
+            [
+                s["text"]
+                for s in transcript_data["segments"]
+                if s["start"] >= cut["start"] and s["end"] <= cut["end"]
+            ]
+        )
+
+        logger.info(f"Validando título: '{cut.get('youtube_title', 'sem-titulo')}'...")
+        cut = validate_and_improve_title(cut, transcript_context)
+        # --- FIM NOVA CAMADA ---
+
         validated_cuts.append(cut)
 
     # Filtrar por viral score mínimo e duração
@@ -839,6 +855,8 @@ def main():
                 f"   Tempo: {cut['start']:.1f}s - {cut['end']:.1f}s ({cut['duration']:.1f}s)"
             )
             print(f"   Texto tela: {cut.get('on_screen_text', 'N/A')}")
+            print(f"   Título YT:  {cut.get('youtube_title', 'N/A')}")
+            print(f"   Thumb Hook: {cut.get('thumbnail_hook', 'N/A')}")
             print(f"   Hook: {cut.get('hook', 'N/A')[:50]}...")
             print(f"   Emoções: {', '.join(cut.get('emotions', []))}")
             print(f"   Motivo: {cut.get('reason', 'N/A')[:80]}...")
