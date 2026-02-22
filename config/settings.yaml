@@ -27,7 +27,7 @@ whisper_config:
     min_silence_duration_ms: 500
 
 # AI Analysis Configuration
-ai_provider: "ollama" # Options: openai, claude, ollama
+ai_provider: "openai" # Options: openai, claude, ollama
 
 # Claude API Configuration
 claude_config:
@@ -74,11 +74,10 @@ download_config:
 
 # Cuts Analysis Configuration
 cuts_config:
-  min_duration: 5 # seconds
-  max_duration: 35 # seconds (Shorts limit: 60s)
-  target_duration: 30 # ideal duration
-  min_retention_score: 8 # minimum score (0-10) to select a cut (legacy, use min_viral_score)
-  min_viral_score: 8.0 # minimum viral score (0-10) for selection
+  min_duration: 25 # seconds (aumentado para garantir densidade de conteúdo e qualidade de podcast)
+  max_duration: 55 # seconds (limite do Shorts é 60s)
+  target_duration: 35 # ideal duration
+  min_viral_score: 5.0 # fallback — perfis em user_profiles.json têm prioridade (recommended=4.0)
   max_cuts_per_video: 5 # maximum number of cuts to extract from analysis
   max_cuts_to_export: 3 # maximum number of cuts to actually export (best ones)
   overlap_tolerance: 2 # seconds of allowed overlap between cuts

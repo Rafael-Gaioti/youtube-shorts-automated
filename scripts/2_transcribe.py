@@ -110,22 +110,19 @@ def transcribe_video(
                 logger.warning("CUDA não disponível, usando CPU...")
                 use_cuda = False
             else:
-                # Tentar verificar cuDNN
+                # Verificar cuDNN de forma confiável
                 try:
-                    # Teste rápido para ver se cuDNN está funcionando
-                    torch.nn.functional.conv2d(
-                        torch.zeros(1, 1, 1, 1, device="cuda"),
-                        torch.zeros(1, 1, 1, 1, device="cuda"),
+                    cudnn_ok = torch.backends.cudnn.is_acceptable(
+                        torch.zeros(1, device="cuda")
                     )
-                    logger.info("CUDA e cuDNN estão funcionando")
+                    if cudnn_ok:
+                        logger.info(
+                            f"CUDA (RTX/GPU) e cuDNN {torch.backends.cudnn.version()} estão funcionando ✓"
+                        )
+                    else:
+                        raise RuntimeError("cuDNN not acceptable")
                 except Exception as e:
-                    logger.warning(f"Erro ao testar cuDNN: {e}")
-                    logger.warning(
-                        "Fazendo fallback para CPU (processamento será mais lento)..."
-                    )
-                    logger.info(
-                        "Dica: Para usar GPU, instale cuDNN de https://developer.nvidia.com/cudnn-downloads"
-                    )
+                    logger.warning(f"cuDNN indisponível ({e}), usando CPU...")
                     use_cuda = False
         except ImportError:
             logger.warning("PyTorch não encontrado, usando CPU...")
@@ -204,7 +201,7 @@ def transcribe_video(
     diarization_segments = []
     hf_token = os.getenv("HF_TOKEN")
 
-    if hf_token and use_cuda:
+    if hf_token:
         try:
             logger.info("Iniciando Diarização (Speaker ID) com Pyannote...")
             from pyannote.audio import Pipeline
@@ -215,7 +212,11 @@ def transcribe_video(
             pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1", use_auth_token=hf_token
             )
-            pipeline.to(torch.device("cuda"))
+
+            # Usar GPU se disponível, senão CPU
+            diarization_device = "cuda" if use_cuda else "cpu"
+            pipeline.to(torch.device(diarization_device))
+            logger.info(f"Diarização rodando em: {diarization_device.upper()}")
 
             # Converter para WAV temporário para evitar erros de codec (LibsndfileError)
             wav_path = str(video_path).replace(".mp4", "_temp_diarization.wav")
@@ -257,18 +258,18 @@ def transcribe_video(
                     {"start": turn.start, "end": turn.end, "speaker": speaker_id}
                 )
 
+            unique_speakers = len(set(s["speaker"] for s in diarization_segments))
             logger.info(
-                f"Diarização concluída. {len(diarization_segments)} trocas de turno detectadas."
+                f"Diarização concluída. {len(diarization_segments)} segmentos, {unique_speakers} locutor(es) únicos."
             )
 
         except Exception as e:
             logger.error(f"Erro na diarização: {e}")
             logger.warning("Prosseguindo sem identificação de oradores.")
     else:
-        if not hf_token:
-            logger.warning("HF_TOKEN não encontrado. Pule a diarização.")
-        if not use_cuda:
-            logger.warning("GPU não disponível para diarização eficiente. Pulando.")
+        logger.warning(
+            "HF_TOKEN não encontrado. Pulando diarização (todos segments terão speaker=1)."
+        )
 
     # Função auxiliar para encontrar orador no tempo T
     def get_speaker_at(time_sec):
@@ -292,12 +293,57 @@ def transcribe_video(
 
         return 1  # Unknown
 
+    def get_speakers_at_interval(start_sec, end_sec):
+        """Retorna todos os locutores que falam dentro de um intervalo e se há overlap."""
+        if not diarization_segments:
+            return [1], False
+
+        active = []
+        for seg in diarization_segments:
+            # Verificar sobreposição temporal
+            if seg["end"] > start_sec and seg["start"] < end_sec:
+                active.append(seg["speaker"])
+
+        unique_in_interval = set(active)
+
+        # Detectar overlap real: 2+ segmentos de locutores diferentes se sobrepõem
+        has_overlap = False
+        if len(unique_in_interval) > 1:
+            # Verificar se algum par de segmentos de locutores diferentes se sobrepõe temporalmente
+            interval_segs = [
+                s
+                for s in diarization_segments
+                if s["end"] > start_sec and s["start"] < end_sec
+            ]
+            for i in range(len(interval_segs)):
+                for j in range(i + 1, len(interval_segs)):
+                    if interval_segs[i]["speaker"] != interval_segs[j]["speaker"]:
+                        # Verificar sobreposição entre os dois segmentos
+                        ov_start = max(
+                            interval_segs[i]["start"], interval_segs[j]["start"]
+                        )
+                        ov_end = min(interval_segs[i]["end"], interval_segs[j]["end"])
+                        if ov_end > ov_start:
+                            has_overlap = True
+                            break
+                if has_overlap:
+                    break
+
+        return list(unique_in_interval) if unique_in_interval else [1], has_overlap
+
+    unique_diarization_speakers = (
+        len(set(s["speaker"] for s in diarization_segments))
+        if diarization_segments
+        else 1
+    )
+
     transcript_data = {
         "video_id": video_path.stem,
         "video_path": str(video_path),
         "language": info.language,
         "language_probability": info.language_probability,
         "duration": info.duration,
+        "diarization_speakers_count": unique_diarization_speakers,
         "segments": [],
     }
 
@@ -332,6 +378,10 @@ def transcribe_video(
                 segment_data["speaker"] = get_speaker_at(
                     (segment.start + segment.end) / 2
                 )
+
+            # Detectar se há sobreposição de vozes neste segmento
+            _, has_overlap = get_speakers_at_interval(segment.start, segment.end)
+            segment_data["overlap"] = has_overlap
 
             transcript_data["segments"].append(segment_data)
     except Exception as e:
@@ -370,7 +420,7 @@ def transcribe_video(
             transcript_data["duration"] = info.duration
             transcript_data["segments"] = []
 
-            # Processar segmentos novamente
+            # Processar segmentos novamente com fallback
             for segment in segments:
                 segment_data = {
                     "id": segment.id,
@@ -379,6 +429,8 @@ def transcribe_video(
                     "text": segment.text.strip(),
                     "avg_logprob": segment.avg_logprob,
                     "no_speech_prob": segment.no_speech_prob,
+                    "words": [],
+                    "speaker": 1,  # Default fallback speaker
                 }
                 transcript_data["segments"].append(segment_data)
         else:

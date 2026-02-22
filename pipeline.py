@@ -4,15 +4,13 @@ import json
 import logging
 import argparse
 from pathlib import Path
+from datetime import datetime
 
-# Configuração de Logging para a Pipeline
+# O log por vídeo é configurado dentro do main() após extrair o video_id
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - 🚀 PIPELINE - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("pipeline_execution.log", encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
+    format="%(asctime)s - PIPELINE - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()],
 )
 logger = logging.getLogger(__name__)
 
@@ -35,6 +33,18 @@ def run_script(script_name: str, args: list = []) -> bool:
 def main():
     parser = argparse.ArgumentParser(description="Pipeline de Automação de Shorts")
     parser.add_argument(
+        "--url",
+        type=str,
+        default=None,
+        help="URL do YouTube para processar diretamente",
+    )
+    parser.add_argument(
+        "--urls-file",
+        type=str,
+        default=None,
+        help="Arquivo de texto com uma URL por linha para processar em batch",
+    )
+    parser.add_argument(
         "--profile", type=str, default="recommended", help="Perfil de usuário (SaaS)"
     )
     parser.add_argument(
@@ -51,6 +61,28 @@ def main():
         type=int,
         default=None,
         help="Forçar número mínimo de oradores (Diarização)",
+    )
+    parser.add_argument(
+        "--force-analyze",
+        action="store_true",
+        help="Forçar re-análise mesmo se já existir analysis.json com cortes",
+    )
+    parser.add_argument(
+        "--force-cut",
+        action="store_true",
+        help="Forçar re-corte mesmo se os arquivos de corte já existirem",
+    )
+    parser.add_argument(
+        "--upload",
+        action="store_true",
+        help="Fazer upload dos shorts ao YouTube após o export (requer 6_upload.py)",
+    )
+    parser.add_argument(
+        "--upload-privacy",
+        type=str,
+        default="private",
+        choices=["private", "unlisted", "public"],
+        help="Privacidade dos vídeos no upload (padrão: private)",
     )
     args_parsed = parser.parse_args()
 
@@ -78,11 +110,177 @@ def main():
         f"=== INICIANDO PIPELINE DE AUTOMAÇÃO DE SHORTS (PERFIL: {args_parsed.profile}) ==="
     )
 
+    # Coletar URLs para processar
+    urls_to_process = []
+    if args_parsed.url:
+        urls_to_process.append(args_parsed.url)
+    if args_parsed.urls_file:
+        urls_file = Path(args_parsed.urls_file)
+        if not urls_file.exists():
+            logger.error(f"Arquivo de URLs não encontrado: {urls_file}")
+            return
+        with open(urls_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    urls_to_process.append(line)
+
+    # -------------------------------------------------------------------------
+    # MODO DIRETO: --url / --urls-file
+    # -------------------------------------------------------------------------
+    if urls_to_process:
+        import re
+
+        total = len(urls_to_process)
+        for idx_url, url in enumerate(urls_to_process, 1):
+            if total > 1:
+                logger.info(f"\n--- URL {idx_url}/{total}: {url} ---")
+            logger.info(f"Modo direto: processando URL {url}")
+
+            # Extrair video_id da URL do YouTube
+            match = re.search(r"(?:v=|youtu\.be/)([\w-]{11})", url)
+            if not match:
+                logger.error(f"Não foi possível extrair video_id da URL: {url}")
+                if total > 1:
+                    continue
+                return
+            video_id = match.group(1)
+            logger.info(f"Video ID: {video_id}")
+
+            # Configurar log por vídeo
+            log_dir = Path("logs")
+            log_dir.mkdir(exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            video_log = log_dir / f"{video_id}_{ts}.log"
+            file_handler = logging.FileHandler(video_log, encoding="utf-8")
+            file_handler.setFormatter(
+                logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+            )
+            logging.getLogger().addHandler(file_handler)
+            logger.info(f"Log salvo em: {video_log}")
+
+            # Verificar se já foi baixado
+            raw_video = Path(f"data/raw/{video_id}.mp4")
+            if raw_video.exists():
+                logger.info(f"Vídeo já baixado: {raw_video}. Pulando download.")
+            else:
+                if not run_script("1_download.py", [url]):
+                    logger.error("Falha no download. Abortando.")
+                    continue
+
+            # Transcrever
+            transcript_path = Path(f"data/transcripts/{video_id}_transcript.json")
+            if transcript_path.exists():
+                logger.info(
+                    f"Transcript já existe: {transcript_path}. Pulando transcrição."
+                )
+            else:
+                transcribe_args = [str(raw_video), "--profile", args_parsed.profile]
+                if args_parsed.min_speakers:
+                    transcribe_args += ["--min-speakers", str(args_parsed.min_speakers)]
+                if not run_script("2_transcribe.py", transcribe_args):
+                    logger.error("Falha na transcrição. Abortando.")
+                    continue
+
+            # Analisar — pular se já existe com cortes válidos (exceto --force-analyze)
+            analysis_path = Path(f"data/analysis/{video_id}_analysis.json")
+            analysis_has_cuts = False
+            if analysis_path.exists() and not args_parsed.force_analyze:
+                try:
+                    import json as _json
+
+                    _a = _json.load(open(analysis_path, "r", encoding="utf-8"))
+                    analysis_has_cuts = len(_a.get("cuts", [])) > 0
+                except Exception:
+                    pass
+
+            if analysis_has_cuts:
+                logger.info(
+                    "Analysis com cortes já existe. Pulando análise (use --force-analyze para re-analisar)."
+                )
+            else:
+                if not run_script(
+                    "3_analyze.py",
+                    [str(transcript_path), "--profile", args_parsed.profile],
+                ):
+                    logger.error("Falha na análise. Abortando.")
+                    continue
+
+            # Cortar — pular se os arquivos de corte já existem (exceto --force-cut)
+            existing_cuts = list(Path("data/output").glob(f"{video_id}_cut_*.mp4"))
+            if existing_cuts and not args_parsed.force_cut:
+                logger.info(
+                    f"{len(existing_cuts)} corte(s) já existem. Pulando 4_cut.py (use --force-cut para re-cortar)."
+                )
+            else:
+                if not run_script(
+                    "4_cut.py", [str(analysis_path), "--profile", args_parsed.profile]
+                ):
+                    logger.error("Falha no corte. Abortando.")
+                    continue
+
+            # Exportar
+            if not run_script(
+                "5_export.py", [str(analysis_path), "--profile", args_parsed.profile]
+            ):
+                logger.error("Falha na exportação. Abortando.")
+                continue
+
+            # Upload (opcional, requer --upload)
+            if args_parsed.upload:
+                logger.info("Iniciando upload para o YouTube...")
+                upload_args = [
+                    str(analysis_path),
+                    "--privacy",
+                    args_parsed.upload_privacy,
+                ]
+                if not run_script("6_upload.py", upload_args):
+                    logger.warning(
+                        "Upload falhou — shorts salvos localmente em data/shorts/"
+                    )
+
+            # Sumário final do vídeo
+            shorts_dir = Path("data/shorts")
+            generated = sorted(shorts_dir.glob(f"{video_id}_cut_*_short.mp4"))
+            logger.info("")
+            logger.info(f"{'=' * 55}")
+            logger.info(f"  PIPELINE CONCLUÍDA — {video_id}")
+            logger.info(f"{'=' * 55}")
+            if generated:
+                try:
+                    with open(analysis_path, "r", encoding="utf-8") as f:
+                        _analysis = json.load(f)
+                    cuts = _analysis.get("cuts", [])
+                    for i, short in enumerate(generated):
+                        size_mb = short.stat().st_size / (1024 * 1024)
+                        score = cuts[i]["viral_score"] if i < len(cuts) else "?"
+                        hook_s = (
+                            cuts[i].get("hook_strength", "?") if i < len(cuts) else "?"
+                        )
+                        logger.info(f"  [{i + 1}] {short.name}")
+                        logger.info(
+                            f"       Viral: {score}/10  Hook: {hook_s}/10  Tamanho: {size_mb:.1f} MB"
+                        )
+                except Exception:
+                    for i, short in enumerate(generated):
+                        size_mb = short.stat().st_size / (1024 * 1024)
+                        logger.info(f"  [{i + 1}] {short.name} ({size_mb:.1f} MB)")
+            else:
+                logger.info("  Nenhum short encontrado no diretório data/shorts/")
+            logger.info(f"  Log: {video_log}")
+            logger.info(f"{'=' * 55}")
+
+            # Remover handler do log por vídeo para não duplicar nas próximas URLs
+            logging.getLogger().removeHandler(file_handler)
+            file_handler.close()
+
+        return
+
+    # -------------------------------------------------------------------------
+    # MODO CANAL: usa discovery_queue.json (comportamento original)
+    # -------------------------------------------------------------------------
+
     # Carregar Profile
-    # The instruction implies a refactor to a settings_manager module.
-    # To maintain functionality without introducing new undefined modules,
-    # I will adapt the existing profile loading logic to match the structure implied by the instruction.
-    # This means keeping the file-based loading but assigning to profile_data and handling errors similarly.
     profile_name = args_parsed.profile
     profiles_path = Path("config/user_profiles.json")
 

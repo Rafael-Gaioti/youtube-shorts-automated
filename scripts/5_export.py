@@ -18,6 +18,9 @@ import os
 # Adicionar o diretório raiz ao path para permitir imports de scripts.*
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from scripts.utils.settings_manager import settings_manager
+from scripts.tools.thumbnail_generator import generate_thumbnail
+from scripts.tools.frame_selector import extract_best_frame
+from scripts.tools.design_auditor import DesignAuditor
 
 # Configurar logging
 logging.basicConfig(
@@ -79,8 +82,8 @@ def create_ass_for_cut(
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Default,Arial Black,{font_size},{primary_color},{secondary_color},&H00000000,&H4B000000,-1,0,0,0,100,100,0,0,1,6,2,2,10,10,250,1",
-        f"Style: Speaker2,Arial Black,{font_size},{secondary_color},{primary_color},&H00000000,&H4B000000,-1,0,0,0,100,100,0,0,1,6,2,2,10,10,150,1",
+        f"Style: Default,Arial Black,{font_size},{primary_color},{secondary_color},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,10,2,2,10,10,250,1",
+        f"Style: Speaker2,Arial Black,{font_size},{secondary_color},{primary_color},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,10,2,2,10,10,150,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -210,42 +213,27 @@ def create_ass_for_cut(
             w_midpoint = (gw["start"] + gw["end"]) / 2
             style_name = "Default"
 
-            # -- Lógica de Estilo Dinâmica baseada nos Oradores do Corte --
+            # -- Lógica de Estilo Robusta (Híbrida) --
+            # Problema: IDs variam (1, 3, SPEAKER_00...). Hardcoding falha.
+            # Solução: Usar índice relativo. O 1º ID da lista (sorted) é Default. O resto é Speaker2.
+
             style_name = "Default"
 
-            # O 'seg' vem do loop externo 'for seg in segments'
-            speaker_id = seg.get("speaker")
-
-            # 1. Determinar quem está falando neste exato momento (word midpoint)
-            current_speaker = speaker_id  # Fallback para o id do segmento
+            # Tentar identificar o orador atual com precisão temporal
+            current_speaker = seg.get("speaker")
+            midpoint = (gw["start"] + gw["end"]) / 2
 
             if speakers_data:
                 for s_info in speakers_data:
-                    if (s_info["start"] - 0.1) <= w_midpoint <= (s_info["end"] + 0.1):
-                        current_speaker = s_info.get("id") or s_info.get("speaker") or 1
+                    if (s_info["start"] - 0.1) <= midpoint <= (s_info["end"] + 0.1):
+                        current_speaker = s_info.get("id") or s_info.get("speaker")
                         break
 
-            # 2. Mapear o ID para um Estilo (0 ou 1)
-            # Usamos a lista pré-calculada unique_speakers_list
-
-            # Se o orador atual estiver na lista, descobre o índice
-            if current_speaker in unique_speakers_list:
-                spk_idx = unique_speakers_list.index(current_speaker)
-                # Alterna entre Default e Speaker2
-                if spk_idx % 2 == 1:
-                    style_name = "Speaker2"
-                else:
-                    style_name = "Default"
-            else:
-                # Fallback, tenta heurística antiga se algo falhou
-                if str(current_speaker) in [
-                    "2",
-                    "3",
-                    "4",
-                    "SPEAKER_01",
-                    "SPEAKER_02",
-                    "SPEAKER_03",
-                ]:
+            # Se identificou um orador e ele NÃO é o primeiro da lista, aplica Speaker2
+            if current_speaker is not None and unique_speakers_list:
+                # Se for o primeiro da lista ordenada (ex: 1), mantém Default (Amarelo)
+                # Se for qualquer outro (ex: 3), aplica Speaker2 (Ciano)
+                if current_speaker != unique_speakers_list[0]:
                     style_name = "Speaker2"
 
             # Efeito Zoom-Pop: inicia em 80% e vai para 100% em 100ms
@@ -301,8 +289,8 @@ def export_to_shorts(
 
     width, height = map(int, resolution.split("x"))
 
-    # Nome do arquivo de saída
-    output_file = output_dir / f"{input_video.stem}_short.mp4"
+    # O nome definitivo será definido após carregar a análise (para usar o Hook como nome)
+    output_file = None
 
     # Tentar encontrar metadados da análise para legendas e headline
     # O nome do arquivo costuma ser: {video_id}_cut_{num}.mp4
@@ -318,25 +306,55 @@ def export_to_shorts(
     )
     primary_color = caption_styles.get("primary_color", "&H00FFFF")
     secondary_color = caption_styles.get("secondary_color", "&H0000FF")
-    font_size = caption_styles.get("font_size", 18)
+    # Aumentar font_size padrão de 18 para 75 para escala 1080p
+    font_size = caption_styles.get("font_size", 75)
 
     if analysis_file.exists():
         try:
             with open(analysis_file, "r", encoding="utf-8") as f:
                 analysis = json.load(f)
 
-            # Encontrar o corte correspondente
-            cut_index_str = input_video.stem.split("_cut_")[-1]
-            idx = int(cut_index_str) - 1
+            # Encontrar o corte correspondente (ex: canal_cut_01_short -> 1)
+            cut_part = input_video.stem.split("_cut_")[-1]
+            import re
+
+            match = re.search(r"(\d+)", cut_part)
+            idx = int(match.group(1)) - 1 if match else 0
+
+            # Default colors
+            th_primary = "#FFFF00"
+            th_secondary = "#FF0000"
+            cut_data = {}
+
             if 0 <= idx < len(analysis["cuts"]):
                 cut_data = analysis["cuts"][idx]
                 headline = cut_data.get("on_screen_text", "").upper()
+                thumb_hook = cut_data.get("thumbnail_hook", headline).upper()
+
+                # -- Engenharia de Atenção: Cores Dinâmicas --
+                content_type = cut_data.get("content_type", "unknown").lower()
+                if (
+                    "fear" in content_type
+                    or "mistake" in content_type
+                    or "danger" in content_type
+                ):
+                    th_primary, th_secondary = "#FFFFFF", "#FF0000"
+                elif (
+                    "success" in content_type
+                    or "money" in content_type
+                    or "wealth" in content_type
+                ):
+                    th_primary, th_secondary = "#FFFF00", "#00FF00"
+                elif (
+                    "mystery" in content_type
+                    or "secret" in content_type
+                    or "revelation" in content_type
+                ):
+                    th_primary, th_secondary = "#00FFFF", "#FF00FF"
 
                 # Gerar ASS (Karaoke Style)
                 transcript_path = Path(analysis["transcript_path"])
-                temp_ass = Path(f"temp_captions_{idx}.ass")
-
-                # Sspeakers data for the cut
+                temp_ass = Path(f"temp_{video_id}_{idx}.ass")
                 speakers_info = cut_data.get("speakers", [])
 
                 if create_ass_for_cut(
@@ -354,138 +372,317 @@ def export_to_shorts(
         except Exception as e:
             logger.warning(f"Erro ao carregar metadados de análise: {e}")
 
-    logger.info(f"Exportando: {input_video.name}")
-    logger.info(f"Resolução: {resolution}")
+    # Definir nome do arquivo de saída simplificado (Human-Readable)
+    # Prioridade: Hook do conteúdo (Thumbnail Hook) -> Headline -> Nome original
+    if "thumb_hook" in locals() and thumb_hook:
+        base_name = (
+            thumb_hook.replace(" ", "-")
+            .replace("?", "")
+            .replace("!", "")
+            .replace(".", "")
+            .upper()
+        )
+    elif safe_headline:
+        base_name = (
+            safe_headline.replace(" ", "-")
+            .replace("?", "")
+            .replace("!", "")
+            .replace(".", "")
+            .upper()
+        )
+    else:
+        base_name = f"{input_video.stem}_V4_3"
 
-    # Montar filtros do FFmpeg básicos (Crop 9:16)
-    video_filters = [
-        f"scale={width}:{height}:force_original_aspect_ratio=increase",
-        f"crop={width}:{height}",
-    ]
+    # Garantir unicidade (caso dois cortes tenham o mesmo hook)
+    video_id_seed = input_video.stem.split("_cut_")[-1]
+    final_name = f"{base_name}_C{video_id_seed}"
+    output_file = output_dir / f"{final_name}.mp4"
+    thumb_path = output_dir / f"{final_name}_thumb.jpg"
 
     # Sanitizar headline para o FFmpeg drawtext
-    # Remover aspas simples e colons que quebram o filtro
     safe_headline = headline.replace("'", "").replace(":", "").strip()
 
-    # Adicionar Legendas ASS (Karaoke)
-    if ass_path and ass_path.exists():
-        # No Windows, o path do filtro subtitles precisa de escape especial para o ':'
-        # E o caminho deve usar forward slashes
-        ass_str = str(ass_path.absolute()).replace("\\", "/").replace(":", "\\:")
-        video_filters.append(f"subtitles='{ass_str}'")
-        logger.info(f"Filtro de legendas aplicado: {ass_path.name}")
+    attempts = 0
+    max_attempts = 3  # Aumentado para permitir múltiplos fixes (Thumb + Headline)
+    current_font_size_override = None
+    current_headline_fontsize = 95 if len(safe_headline) <= 15 else 70
+    audit_results = {}
+    output_file = None
 
-    # Adicionar Headline (Texto fixo no topo)
-    if safe_headline:
-        # Estilo: Fundo preto semi-transparente, texto branco, centralizado no topo
-        # Usamos : em vez de = para os parâmetros internos do drawtext para evitar conflitos no vf
-        drawtext_filter = (
-            f"drawtext=text='{safe_headline}':fontcolor=white:fontsize=80:"
-            f"box=1:boxcolor=black@0.6:boxborderw=20:"
-            f"x=(w-text_w)/2:y=200"
+    # Gerar nome base uma vez
+    if "thumb_hook" in locals() and thumb_hook:
+        base_name = (
+            thumb_hook.replace(" ", "-")
+            .replace("?", "")
+            .replace("!", "")
+            .replace(".", "")
+            .upper()
         )
-        video_filters.append(drawtext_filter)
-        logger.info(f"Filtro de headline aplicado: {safe_headline}")
+    elif safe_headline:
+        base_name = (
+            safe_headline.replace(" ", "-")
+            .replace("?", "")
+            .replace("!", "")
+            .replace(".", "")
+            .upper()
+        )
+    else:
+        base_name = f"{input_video.stem}_V4_3"
 
-    # FFmpeg command para conversão com reencoding
-    logger.info(f"DEBUG: video_filters={video_filters}")
+    video_id_seed = input_video.stem.split("_cut_")[-1]
+    final_name = f"{base_name}_C{video_id_seed}"
+    output_file = output_dir / f"{final_name}.mp4"
+    thumb_path = output_dir / f"{final_name}_thumb.jpg"
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(input_video.absolute()),
-        "-vf",
-        ",".join(video_filters),
-        "-c:v",
-        video_cfg["video_codec"],
-        "-preset",
-        video_cfg["preset"],
-        "-crf",
-        str(video_cfg["crf"]),
-        "-b:v",
-        video_cfg["video_bitrate"],
-        "-r",
-        str(video_cfg["fps"]),
-        "-c:a",
-        video_cfg["audio_codec"],
-        "-b:a",
-        video_cfg["audio_bitrate"],
-        "-movflags",
-        "+faststart",
-        str(output_file.absolute()),
-    ]
+    while attempts < max_attempts:
+        logger.info(f"--- Tentativa {attempts + 1} de exportação: {final_name} ---")
 
-    import json as json_lib
+        # Re-montar filtros do FFmpeg para permitir mudanças de fonte na Headline
+        video_filters = [
+            f"scale={width}:{height}:force_original_aspect_ratio=increase",
+            f"crop={width}:{height}",
+        ]
 
-    logger.info(f"DEBUG_CMD: {json_lib.dumps(cmd)}")
-    logger.info(f"Executando FFmpeg: {' '.join(cmd)}")
-    try:
-        process = subprocess.run(cmd, capture_output=True, text=True)
-        if process.returncode != 0:
-            with open("ffmpeg_error.txt", "w", encoding="utf-8") as err_f:
-                err_f.write(process.stderr)
-            logger.error(
-                f"FFmpeg falhou (ver ffmpeg_error.txt). Código: {process.returncode}"
+        # Adicionar Legendas ASS (Karaoke)
+        if ass_path and ass_path.exists():
+            ass_str = str(ass_path).replace("\\", "/")
+            video_filters.append(f"subtitles={ass_str}")
+
+        # Adicionar Headline com fonte atual (pode ser reduzida no auto-fix)
+        if safe_headline:
+            drawtext_filter = (
+                f"drawtext=text='{safe_headline}':fontcolor=white:fontsize={current_headline_fontsize}:font='Arial Black':"
+                f"borderw=4:bordercolor=black@0.8:shadowx=6:shadowy=6:shadowcolor=black@0.8:"
+                f"x=(w-text_w)/2:y=220"
             )
-            raise RuntimeError(f"FFmpeg falhou com código {process.returncode}")
+            video_filters.append(drawtext_filter)
 
-        logger.info(f"✓ Exportado: {output_file.name}")
+            watermark_filter = (
+                "drawtext=text='v4.3':fontcolor=white@0.5:fontsize=32:font='Arial':"
+                "x=w-text_w-40:y=40:borderw=1:bordercolor=black@0.3"
+            )
+            video_filters.append(watermark_filter)
 
-        # Informações do arquivo
-        if output_file.exists():
-            size_mb = output_file.stat().st_size / (1024 * 1024)
-            logger.info(f"Tamanho: {size_mb:.1f} MB")
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_video.absolute()),
+            "-vf",
+            ",".join(video_filters),
+            "-c:v",
+            video_cfg["video_codec"],
+            "-preset",
+            video_cfg["preset"],
+            "-crf",
+            str(video_cfg["crf"]),
+            "-b:v",
+            video_cfg["video_bitrate"],
+            "-r",
+            str(video_cfg["fps"]),
+            "-c:a",
+            video_cfg["audio_codec"],
+            "-b:a",
+            video_cfg["audio_bitrate"],
+            "-movflags",
+            "+faststart",
+            str(output_file.absolute()),
+        ]
 
-        return output_file
+        try:
+            # 1. Exportar Vídeo (Forçar se for uma tentativa de Auto-Fix)
+            if attempts > 0 or not output_file.exists():
+                process = subprocess.run(cmd, capture_output=True, text=True)
+                if process.returncode != 0:
+                    raise RuntimeError(f"FFmpeg falhou: {process.stderr}")
 
-    except Exception as e:
-        logger.error(f"Erro ao exportar vídeo: {e}")
-        raise
+            # 2. Lógica de Thumbnail
+            dynamic_timestamp = "00:00:01"
+            th_zoom_level = 1.0
+            th_vignette = False
+            best_frame_path = None
+
+            if "cut_data" in locals() and cut_data.get("speakers"):
+                relative_start = max(
+                    0, cut_data["speakers"][0]["start"] - cut_data["start"]
+                )
+                th_strategy = cut_data.get("thumbnail_strategy", {})
+                peak_offset = float(th_strategy.get("peak_action_offset", 1.5))
+                th_zoom_level = float(th_strategy.get("zoom_level", 1.0))
+                th_vignette = bool(th_strategy.get("vignette", False))
+
+                target_time = min(
+                    cut_data["duration"] * 0.9, relative_start + peak_offset
+                )
+
+                # Computer Vision Frame Selection
+                candidate_frame = output_dir / f"{output_file.stem}_cv_temp.jpg"
+                if extract_best_frame(output_file, candidate_frame, target_time):
+                    best_frame_path = candidate_frame
+
+                td = timedelta(seconds=target_time)
+                dynamic_timestamp = f"{int(td.total_seconds() // 3600):02d}:{int((td.total_seconds() % 3600) // 60):02d}:{int(td.total_seconds() % 60):02d}.{int(td.microseconds / 1000):03d}"
+
+            generate_thumbnail(
+                output_file,
+                thumb_path,
+                text=thumb_hook if "thumb_hook" in locals() else headline,
+                extraction_timestamp=dynamic_timestamp,
+                zoom_level=th_zoom_level,
+                vignette=th_vignette,
+                bg_image_path=best_frame_path,
+                primary_color=th_primary if "th_primary" in locals() else "#FFFF00",
+                secondary_color=th_secondary
+                if "th_secondary" in locals()
+                else "#FF0000",
+                font_size_override=current_font_size_override,
+            )
+
+            # 3. Auditoria Gatekeeper
+            auditor = DesignAuditor()
+            audit_results = auditor.run_audit(
+                video_id=output_file.stem,
+                video_path=output_file,
+                thumb_path=thumb_path,
+                ass_path=ass_path,
+                headline=safe_headline,
+                headline_fontsize=current_headline_fontsize,
+            )
+
+            if audit_results.get("is_approved"):
+                logger.info(
+                    f"✅ Short APROVADO (Score: {audit_results['overall_score']})"
+                )
+                break
+
+            # Auto-Fix
+            if attempts < max_attempts - 1:
+                thumb_data = audit_results.get("thumbnail", {})
+                thumb_score = thumb_data.get("score", 0)
+                thumb_collision = thumb_data.get("has_collision", False)
+
+                graphics_issues = audit_results.get("graphics", {}).get("issues", [])
+                graphics_collision = any(
+                    "colis" in issue.lower() for issue in graphics_issues
+                )
+
+                logger.info(
+                    f"DEBUG AUTO-FIX: thumb_collision={thumb_collision}, graphics_collision={graphics_collision}, graphics_issues={graphics_issues}"
+                )
+
+                # 1. Prioridade: Corrigir Colisões (Textos que vazam)
+                fixed_something = False
+
+                if thumb_collision:
+                    # Se não há override, o padrão é 230/200. Começamos reduzindo.
+                    if current_font_size_override is None:
+                        current_font_size_override = (
+                            190 if len(safe_headline) <= 12 else 170
+                        )
+                    else:
+                        current_font_size_override = int(
+                            current_font_size_override * 0.85
+                        )
+                    logger.info(
+                        f"Auto-Fix: Colisão na thumbnail. Reduzindo fonte para {current_font_size_override}"
+                    )
+                    fixed_something = True
+
+                # 2. Secundário: Aumentar visibilidade APENAS se o problema for falta clara de área de texto
+                # e nunca revertendo um encolhimento de colisão (Evita Pingue-Pongue de 170 -> 260)
+                elif thumb_data.get("text_area_score", 10) < 5 and not thumb_collision:
+                    if (
+                        current_font_size_override is None
+                        or current_font_size_override < 200
+                    ):
+                        current_font_size_override = 230
+                        logger.info(
+                            "Auto-Fix: Aumentando fonte da thumbnail para 230 (score de área baixo)"
+                        )
+                        fixed_something = True
+
+                # Checar Graphic Collision independente da Thumbnail
+                if graphics_collision:
+                    # Reduzir fonte da headline em 15%
+                    current_headline_fontsize = int(current_headline_fontsize * 0.85)
+                    logger.info(
+                        f"Auto-Fix: Headline muito larga. Reduzindo para {current_headline_fontsize}px"
+                    )
+                    fixed_something = True
+
+                if not fixed_something:
+                    logger.warning(
+                        "Não há auto-fix óbvio para as falhas detectadas (Provavelmente falta rosto na imagem)."
+                    )
+                    break
+
+            attempts += 1
+        except Exception as e:
+            logger.error(f"Erro no loop de exportação: {e}")
+            break
+
+    # Cleanup
+    if ass_path and ass_path.exists():
+        try:
+            ass_path.unlink()
+        except:
+            pass
+    if best_frame_path and best_frame_path.exists():
+        try:
+            best_frame_path.unlink()
+        except:
+            pass
+
+    return output_file, audit_results
 
 
 def batch_export(
     input_dir: Optional[Path] = None,
     output_dir: Optional[Path] = None,
     profile_settings: Optional[dict] = None,
+    target_count: int = 3,
 ) -> List[Path]:
-    """
-    Exporta todos os vídeos cortados em lote.
-
-    Args:
-        input_dir: Diretório com vídeos cortados (opcional)
-        output_dir: Diretório de saída (opcional)
-
-    Returns:
-        Lista de paths dos vídeos exportados
-    """
+    """Exporta vídeos garantindo uma cota de aprovados."""
     config = load_config()
-
     if input_dir is None:
         input_dir = Path(config["paths"]["output"])
 
-    # Buscar todos os vídeos cortados
     cut_videos = list(input_dir.glob("*_cut_*.mp4"))
-
     if not cut_videos:
         logger.warning(f"Nenhum vídeo cortado encontrado em {input_dir}")
         return []
 
-    logger.info(f"Encontrados {len(cut_videos)} vídeos para exportar")
+    # Ordenar por Score de IA se disponível ou apenas processar
+    logger.info(
+        f"Iniciando Batch Export com Gatekeeper. Meta: {target_count} aprovados."
+    )
 
-    output_files = []
+    approved_files = []
 
     for video in cut_videos:
+        if len(approved_files) >= target_count:
+            logger.info(f"Meta de {target_count} shorts atingida. Pulando restantes.")
+            break
+
         try:
-            output_file = export_to_shorts(
+            output_file, audit = export_to_shorts(
                 video, output_dir, profile_settings=profile_settings
             )
-            output_files.append(output_file)
+
+            if audit.get("is_approved"):
+                approved_files.append(output_file)
+                logger.info(f"Produção Progress: {len(approved_files)}/{target_count}")
+            else:
+                logger.warning(
+                    f"Descartando Short reprovado pelo Gatekeeper: {output_file.name}"
+                )
+                # Opcional: deletar arquivo reprovado se quiser economizar espaço
+                # output_file.unlink()
         except Exception as e:
-            logger.error(f"Erro ao exportar {video.name}: {e}")
+            logger.error(f"Erro ao processar {video.name}: {e}")
             continue
 
-    return output_files
+    return approved_files
 
 
 def find_latest_cut() -> Path:
@@ -541,10 +738,35 @@ def main():
             sys.exit(1)
     elif args.video and args.video.endswith(".json"):
         logger.info(
-            f"Detectado arquivo de análise: {args.video}. Extraindo cortes via Batch..."
+            f"Detectado arquivo de análise: {args.video}. Exportando cortes do vídeo..."
         )
         try:
-            output_files = batch_export(profile_settings=settings)
+            import json as _json
+
+            analysis_path = Path(args.video)
+            with open(analysis_path, "r", encoding="utf-8") as _f:
+                _analysis = _json.load(_f)
+
+            video_id = _analysis["video_id"]
+            config = load_config()
+            output_dir = Path(config["paths"]["output"])
+            shorts_dir = Path(config["paths"]["data_root"]) / "shorts"
+
+            # Buscar cortes do video_id em data/output/
+            cut_files = sorted(output_dir.glob(f"{video_id}_cut_*.mp4"))
+            if not cut_files:
+                logger.error(f"Nenhum corte encontrado em {output_dir} para {video_id}")
+                sys.exit(1)
+
+            logger.info(f"Encontrados {len(cut_files)} corte(s) para {video_id}")
+            output_files = []
+            for cut in cut_files:
+                out_file, audit = export_to_shorts(
+                    cut, output_dir=shorts_dir, profile_settings=settings
+                )
+                output_files.append(out_file)
+
+            logger.info(f"Exportação concluída: {len(output_files)} short(s) gerados.")
             return
         except Exception as e:
             logger.error(f"Erro fatal: {e}", exc_info=True)
@@ -578,7 +800,7 @@ def main():
     try:
         for video_path in videos_to_export:
             logger.info(f"Processando com perfil '{args.profile}': {video_path}")
-            output_file = export_to_shorts(video_path, profile_settings=settings)
+            output_file, audit = export_to_shorts(video_path, profile_settings=settings)
 
             size_mb = output_file.stat().st_size / (1024 * 1024)
             print(f"\n✓ Short criado com sucesso!")

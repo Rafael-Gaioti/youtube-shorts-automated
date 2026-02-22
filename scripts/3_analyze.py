@@ -107,14 +107,25 @@ def analyze_transcript(
     with open(transcript_path, "r", encoding="utf-8") as f:
         transcript_data = json.load(f)
 
-    # Preparar texto para análise com numeração de linhas
+    # Preparar texto para análise com numeração de linhas, speaker e flag de overlap
     segments_text = []
     for i, seg in enumerate(transcript_data["segments"]):
+        speaker = seg.get("speaker", 1)
+        overlap_flag = " [OVERLAP]" if seg.get("overlap") else ""
         segments_text.append(
-            f"L{i}: [{seg['start']:.1f}s - {seg['end']:.1f}s] {seg['text']}"
+            f"L{i}: [{seg['start']:.1f}s - {seg['end']:.1f}s] (S{speaker}){overlap_flag} {seg['text']}"
         )
 
     transcript_formatted = "\n".join(segments_text)
+
+    # Estatísticas de diarização para o contexto
+    speakers_count = transcript_data.get("diarization_speakers_count", 1)
+    overlap_count = sum(1 for s in transcript_data["segments"] if s.get("overlap"))
+    overlap_pct = (
+        (overlap_count / len(transcript_data["segments"]) * 100)
+        if transcript_data["segments"]
+        else 0
+    )
 
     # Montar prompt
     system_prompt = load_prompt()
@@ -126,13 +137,38 @@ def analyze_transcript(
         .get("analysis_bias", "balanced")
     )
     if analysis_bias != "balanced":
-        logger.info(f"🧠 Aplicando viés de análise: {analysis_bias}")
+        logger.info(f"Aplicando viés de análise: {analysis_bias}")
         bias_instructions = {
             "funny_moments": "\nPRIORITIZE FUNNY MOMENTS, humor, jokes, and high-energy laughter.",
             "high_retention_segments": "\nPRIORITIZE HIGH-RETENTION segments, educational insights, and controversial points.",
             "tech_insights": "\nPRIORITIZE TECHNICAL INSIGHTS, coding tips, and industry trends.",
         }
         system_prompt += bias_instructions.get(analysis_bias, "")
+
+    # Regras de qualidade de corte (sempre ativas)
+    min_dur = cuts_cfg.get("min_duration", 25)
+    max_dur = cuts_cfg.get("max_duration", 55)
+    system_prompt += f"""
+
+### STRICT SELECTION RULES (MANDATORY):
+- Each cut MUST be between {min_dur} and {max_dur} seconds long. REJECT shorter cuts.
+- AVOID any segment tagged [OVERLAP] — these are moments where speakers talk simultaneously and the transcript will be unreliable.
+- AVOID promotional content: ads, sponsorships, QR codes, "link in bio", discount codes, product placements.
+- PREFER segments where a SINGLE speaker (S1 or S2) talks clearly for the entire cut.
+- PREFER clean speaker transitions (S1 finishes, then S2 starts) — NOT simultaneous speech.
+- The `speaker_map` keys are line numbers (e.g., L0, L5). Map each line in the cut to its speaker number.
+- `on_screen_text` must be a SHORT, IMPACTFUL headline in ALL CAPS (max 5 words) summarizing the cut's hook.
+- `thumbnail_hook` (NEW/CRITICAL): A 2-to-3 word CLICKBAIT trigger for the thumbnail. Must CREATE FEAR, FOMO, or EXTREME CURIOSITY. Transform the topic into a personal threat or an urgent revelation. Do NOT summarize info. Example: instead of "AI Jobs Market", use "VOCÊ VAI SUMIR" or "A IA VENCEU" or "SEU EMPREGO ACABOU".
+- `content_type` (CRITICAL): Classify the cut to trigger specific dynamic colors:
+    - `"fear_mistake"`: If the hook is cautionary, dangerous, or about a fail. (Triggers White/Red)
+    - `"success_wealth"`: If the hook is about money, winning, or achievement. (Triggers Yellow/Green)
+    - `"mystery_revelation"`: If the hook is a secret, tech insight, or "holy grail". (Triggers Cyan/Purple)
+    - `"general_alert"`: Default category for high energy moments. (Triggers Yellow/Red)
+- `thumbnail_strategy` (NEW/CRITICAL): A nested JSON object for graphic art direction. Must contain:
+    - `"peak_action_offset"` (float): The exact second (relative to the cut start, between 0.0 and 5.0) where the speaker shows intense emotion. Pick the peak moment.
+    - `"zoom_level"` (float): Multiplier between 1.0 and 1.3 to crop the face. Use 1.2 or 1.3 for dramatic/aggressive hooks to create claustrophobia.
+    - `"vignette"` (bool): True if the hook is aggressive/fearful (darkens the edges to add tension), False otherwise.
+"""
 
     # Personalizar prompt se for modelo local (para garantir formato e speaker_map)
     if ai_provider == "ollama":
@@ -152,7 +188,12 @@ def analyze_transcript(
     "cliffhanger": "Ultimos 3s do texto",
     "emotions": ["curiosity", "inspiration"],
     "reason": "Explicação do corte",
-    "speaker_map": {"L1": 1, "L2": 1, "L3": 2}
+    "speaker_map": {"L1": 1, "L2": 1, "L3": 2},
+    "thumbnail_strategy": {
+        "peak_action_offset": 1.5,
+        "zoom_level": 1.2,
+        "vignette": true
+    }
   }
 ]
 """
@@ -161,11 +202,15 @@ def analyze_transcript(
     user_message = f"""Vídeo ID: {transcript_data["video_id"]}
 Duração total: {transcript_data["duration"]:.1f}s
 Idioma: {transcript_data["language"]}
+Locutores detectados: {speakers_count}
+Segmentos com sobreposição: {overlap_count} ({overlap_pct:.0f}%)
+
+LEGEND: (S1)=Locutor 1, (S2)=Locutor 2, [OVERLAP]=vozes sobrepostas (evitar)
 
 TRANSCRIÇÃO:
 {transcript_formatted}
 
-Analise e retorne os {max_cuts} melhores momentos em JSON no formato: {{"cuts": [...]}}"""
+Selecione os {max_cuts} melhores momentos. IMPORTANTE: cada corte deve ter entre {cuts_cfg.get("min_duration", 25)} e {cuts_cfg.get("max_duration", 55)} segundos. Retorne JSON: {{"cuts": [...]}}"""
 
     response_text = ""
 
@@ -507,21 +552,42 @@ Analise e retorne os {max_cuts} melhores momentos em JSON no formato: {{"cuts": 
 
         # 5. On Screen Text (Headline)
         on_screen_text = (
-            cut.get("on_screen_text", cut.get("headline", "MOMENTO INCRÍVEL"))
-            .strip()
-            .upper()
+            cut.get("on_screen_text", cut.get("headline", "REVELAÇÃO")).strip().upper()
         )
         if not on_screen_text or on_screen_text == "DESTAQUE":
-            on_screen_text = "MOMENTO INCRÍVEL"
+            on_screen_text = "REVELAÇÃO"
         cut["on_screen_text"] = on_screen_text
 
         cut.setdefault("content_type", "unknown")
-        cut.setdefault("emotions", [])
-        cut.setdefault("keywords", [])
-        cut.setdefault("hook", "")
-        cut.setdefault("cliffhanger", "")
-        cut.setdefault("target_audience", "geral")
-        cut.setdefault("reason", cut.get("rationale", ""))
+        # ... (rest of defaults) ...
+
+        # O novo campo do prompt agressivo: thumbnail_hook
+        th_hook = cut.get("thumbnail_hook", "").strip().upper()
+        if not th_hook:
+            # Fallback inteligente: usa as 2 primeiras palavras do on_screen_text
+            words = on_screen_text.split()
+            th_hook = " ".join(words[:2]) if words else "VEJA"
+
+        # Garantir limite de 3 palavras para outdoor style
+        th_hook = " ".join(th_hook.split()[:3])
+        cut["thumbnail_hook"] = th_hook
+
+        # Nova Estratégia de Capa V4 (Psycho-Visuals)
+        th_strategy = cut.get("thumbnail_strategy", {})
+        if not isinstance(th_strategy, dict):
+            th_strategy = {}
+
+        cut["thumbnail_strategy"] = {
+            "peak_action_offset": float(th_strategy.get("peak_action_offset", 1.5)),
+            "zoom_level": float(th_strategy.get("zoom_level", 1.0)),
+            "vignette": bool(th_strategy.get("vignette", False)),
+        }
+
+        # Novos campos de retenção (CONSISTENCY_PHASE_PLAN)
+        cut.setdefault("hook_strength", 5)
+        cut.setdefault("opening_pattern", "unknown")
+        cut.setdefault("emotional_intensity", 5)
+        cut.setdefault("loop_potential", 5)
 
         # Novo sistema: converter speaker_map (L0: 1, L1: 2...) para a lista speakers
         speaker_map = cut.get("speaker_map", {})
@@ -530,6 +596,25 @@ Analise e retorne os {max_cuts} melhores momentos em JSON no formato: {{"cuts": 
             # Ordenar chaves numéricas (L0, L1, L10...)
             try:
                 sorted_keys = sorted(speaker_map.keys(), key=lambda x: int(x[1:]))
+
+                # Sobrescreve START e END da IA pelas timestamps milimétricas do transcript
+                if sorted_keys:
+                    first_idx = int(sorted_keys[0][1:])
+                    last_idx = int(sorted_keys[-1][1:])
+
+                    if first_idx < len(transcript_data["segments"]) and last_idx < len(
+                        transcript_data["segments"]
+                    ):
+                        true_start = transcript_data["segments"][first_idx]["start"]
+                        true_end = transcript_data["segments"][last_idx]["end"]
+
+                        logger.info(
+                            f"Corrigindo timestamps via speaker_map: {cut['start']}->{true_start}, {cut['end']}->{true_end}"
+                        )
+                        cut["start"] = true_start
+                        cut["end"] = true_end
+                        cut["duration"] = true_end - true_start
+
                 for key in sorted_keys:
                     idx = int(key[1:])
                     if idx < len(transcript_data["segments"]):
@@ -609,11 +694,14 @@ Analise e retorne os {max_cuts} melhores momentos em JSON no formato: {{"cuts": 
 
     # Filtrar por viral score mínimo e duração
     original_count = len(validated_cuts)
-    min_duration = cuts_cfg.get("min_duration", 15)
+    min_duration = cuts_cfg.get("min_duration", 25)
 
     filtered_cuts = []
     for cut in validated_cuts:
         if cut["viral_score"] < min_viral_score:
+            logger.warning(
+                f"Corte rejeitado (viral_score {cut['viral_score']} < {min_viral_score}): {cut}"
+            )
             continue
 
         if cut["duration"] < min_duration:
@@ -660,6 +748,30 @@ Analise e retorne os {max_cuts} melhores momentos em JSON no formato: {{"cuts": 
     logger.info(
         f"Score viral médio: {analysis_data['stats']['avg_viral_score']:.1f}/10"
     )
+
+    # Log detalhado dos cortes com os novos campos de retenção
+    for i, cut in enumerate(final_cuts, 1):
+        try:
+            logger.info(
+                f"{i}. [{cut.get('content_type', 'N/A')}] Score: {cut.get('viral_score', 0):.1f}/10  "
+                f"Hook: {cut.get('hook_strength', 0)}/10  Emoção: {cut.get('emotional_intensity', 0)}/10  Loop: {cut.get('loop_potential', 0)}/10"
+            )
+            logger.info(
+                f"   Tempo: {cut.get('start', 0):.1f}s - {cut.get('end', 0):.1f}s ({cut.get('duration', 0):.1f}s)"
+            )
+            logger.info(f"   Thumb Hook: {cut.get('thumbnail_hook', 'N/A')}")
+            logger.info(f"   Texto tela: {cut.get('on_screen_text', 'N/A')}")
+            logger.info(f"   Padrão abertura: {cut.get('opening_pattern', 'N/A')}")
+            hook_text = cut.get("hook", "N/A")
+            logger.info(
+                f"   Hook: {hook_text[:80]}{'...' if len(hook_text) > 80 else ''}"
+            )
+            emotions = cut.get("emotions", [])
+            logger.info(
+                f"   Emoções: {', '.join(emotions) if isinstance(emotions, list) else emotions}"
+            )
+        except Exception as e:
+            logger.warning(f"Erro ao logar detalhes do corte {i}: {e}")
 
     # Salvar análise
     output_file = output_dir / f"{transcript_data['video_id']}_analysis.json"

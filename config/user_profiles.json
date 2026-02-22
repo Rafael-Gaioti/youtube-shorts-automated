@@ -5,8 +5,10 @@
         "caption_styles": {
             "primary_color": "&H00FFFF",
             "secondary_color": "&H00FFFF00",
-            "font_size": 18,
-            "min_viral_score": 3.0
+            "font_size": 52
+        },
+        "analysis_config": {
+            "min_viral_score": 4.0
         },
         "discovery_rules": {
             "min_roi": 1.5,
@@ -20,7 +22,7 @@
         "caption_styles": {
             "primary_color": "&H0000FF00",
             "secondary_color": "&H00FF00FF",
-            "font_size": 22
+            "font_size": 52
         },
         "discovery_rules": {
             "min_roi": 0.5,

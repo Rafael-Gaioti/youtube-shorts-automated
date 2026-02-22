@@ -6,6 +6,9 @@ temp_*/
 *.ass
 *.log
 ffmpeg_error.txt
+err.txt
+out.txt
+nul
 debug_last_ai_response.json
 .venv/
 __pycache__/
@@ -18,3 +21,9 @@ __pycache__/
 !package.json
 !tsconfig.json
 !data/.gitkeep
+
+# Credenciais YouTube (NUNCA commitar)
+client_secret*.json
+config/youtube_token.json
+config/youtube_metrics_token.json
+.env
