@@ -467,6 +467,12 @@ def main():
         action="store_true",
         help="Apenas realizar a autenticação OAuth2 e sair",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=2,
+        help="Quantidade de vídeos para upload no modo autônomo",
+    )
     args = parser.parse_args()
 
     # Carregar configurações do Perfil para usar depois
@@ -490,7 +496,7 @@ def main():
             profile_settings=settings,
             privacy=args.privacy,
             dry_run=args.dry_run,
-            target_count=2,
+            target_count=args.limit,
         )
         sys.exit(0)
 
