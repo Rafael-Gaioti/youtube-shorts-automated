@@ -8,6 +8,7 @@ import json
 import logging
 import subprocess
 import argparse
+import uuid
 from pathlib import Path
 from typing import List, Optional
 from datetime import timedelta
@@ -21,6 +22,7 @@ from scripts.utils.settings_manager import settings_manager
 from scripts.tools.thumbnail_generator import generate_thumbnail
 from scripts.tools.frame_selector import extract_best_frame
 from scripts.tools.design_auditor import DesignAuditor
+from scripts.tools.video_quarantine import quarantine_video
 
 # Configurar logging
 logging.basicConfig(
@@ -299,6 +301,9 @@ def export_to_shorts(
 
     headline = ""
     ass_path = None
+    transcript_path = None
+    youtube_title = ""
+    thumb_hook = ""
 
     # Carregar configurações de estilo do perfil SaaS se disponíveis
     caption_styles = (
@@ -328,8 +333,14 @@ def export_to_shorts(
 
             if 0 <= idx < len(analysis["cuts"]):
                 cut_data = analysis["cuts"][idx]
+                logger.info(f"DEBUG: Usando cut_data no indice {idx}")
+                logger.info(
+                    f"DEBUG: Range nominal: {cut_data['start']}s - {cut_data['end']}s"
+                )
+                logger.info(f"DEBUG: Thumbnail Hook: {cut_data.get('thumbnail_hook')}")
                 headline = cut_data.get("on_screen_text", "").upper()
                 thumb_hook = cut_data.get("thumbnail_hook", headline).upper()
+                youtube_title = cut_data.get("youtube_title", "").upper()
 
                 # -- Engenharia de Atenção: Cores Dinâmicas --
                 content_type = cut_data.get("content_type", "unknown").lower()
@@ -354,7 +365,8 @@ def export_to_shorts(
 
                 # Gerar ASS (Karaoke Style)
                 transcript_path = Path(analysis["transcript_path"])
-                temp_ass = Path(f"temp_{video_id}_{idx}.ass")
+                # Usar UUID para evitar colisões em processamento paralelo ou retries
+                temp_ass = Path(f"temp_{uuid.uuid4().hex[:8]}.ass")
                 speakers_info = cut_data.get("speakers", [])
 
                 if create_ass_for_cut(
@@ -372,7 +384,20 @@ def export_to_shorts(
         except Exception as e:
             logger.warning(f"Erro ao carregar metadados de análise: {e}")
 
-    # Definir nome do arquivo de saída simplificado (Human-Readable)
+    # Guard de Sincronização: Verificar se o vídeo é MAIS ANTIGO que a análise
+    # Se a análise foi refeita mas o corte não, temos um risco alto de desalinhamento
+    if analysis_file.exists() and input_video.exists():
+        analysis_mtime = analysis_file.stat().st_mtime
+        video_mtime = input_video.stat().st_mtime
+
+        # Se a diferença for significativa (>5 segundos) e o vídeo for mais antigo
+        if (analysis_mtime - video_mtime) > 5:
+            logger.warning(
+                "! WARNING: O vídeo de entrada é mais antigo que o arquivo de análise !"
+            )
+            logger.warning(
+                f"! Isso pode causar legendas desalinhadas. Re-execute 'scripts/4_cut.py' para sincronizar."
+            )
     # Prioridade: Hook do conteúdo (Thumbnail Hook) -> Headline -> Nome original
     if "thumb_hook" in locals() and thumb_hook:
         base_name = (
@@ -404,6 +429,7 @@ def export_to_shorts(
 
     attempts = 0
     max_attempts = 3  # Aumentado para permitir múltiplos fixes (Thumb + Headline)
+    auditor = DesignAuditor()
     current_font_size_override = None
     current_headline_fontsize = 95 if len(safe_headline) <= 15 else 70
     audit_results = {}
@@ -538,8 +564,6 @@ def export_to_shorts(
                 font_size_override=current_font_size_override,
             )
 
-            # 3. Auditoria Gatekeeper
-            auditor = DesignAuditor()
             audit_results = auditor.run_audit(
                 video_id=output_file.stem,
                 video_path=output_file,
@@ -547,6 +571,10 @@ def export_to_shorts(
                 ass_path=ass_path,
                 headline=safe_headline,
                 headline_fontsize=current_headline_fontsize,
+                transcript_path=transcript_path,
+                youtube_title=youtube_title,
+                thumb_hook=thumb_hook,
+                cut_start=cut_data["start"],
             )
 
             if audit_results.get("is_approved"):
@@ -554,6 +582,10 @@ def export_to_shorts(
                     f"✅ Short APROVADO (Score: {audit_results['overall_score']})"
                 )
                 break
+            else:
+                logger.warning(
+                    f"❌ Short REPROVADO (Score: {audit_results['overall_score']}) - Motivo: {audit_results.get('recommendations', ['Erro desconhecido'])[0]}"
+                )
 
             # Auto-Fix
             if attempts < max_attempts - 1:
@@ -672,14 +704,101 @@ def batch_export(
             if audit.get("is_approved"):
                 approved_files.append(output_file)
                 logger.info(f"Produção Progress: {len(approved_files)}/{target_count}")
+                logger.info(f"✅ VÍDEO APROVADO NO GATEKEEPER: {output_file.name}")
             else:
-                logger.warning(
-                    f"Descartando Short reprovado pelo Gatekeeper: {output_file.name}"
+                logger.error(f"❌ VÍDEO REPROVADO NO GATEKEEPER: {output_file.name}")
+                logger.error(
+                    f"Razão: {audit.get('reasons', ['Audit score below threshold'])}"
                 )
-                # Opcional: deletar arquivo reprovado se quiser economizar espaço
-                # output_file.unlink()
+
+                # MOVER PARA QUARENTENA
+                q_dir = quarantine_video(
+                    output_file, reason=" | ".join(audit.get("reasons", []))
+                )
+                if q_dir:
+                    logger.warning(f"⚠️  Vídeo movido para QUARENTENA: {q_dir}")
+
+                if "recommendations" in audit:
+                    print(f"\n💡 RECOMENDAÇÕES:\n{audit['recommendations']}")
         except Exception as e:
             logger.error(f"Erro ao processar {video.name}: {e}")
+            continue
+
+    return approved_files
+
+
+def run_autonomous_export(profile_settings: Optional[dict] = None) -> List[Path]:
+    """Exporta cortes pendentes usando o banco de dados Supabase."""
+    from scripts.utils import supabase_client
+
+    config = load_config()
+    input_dir = Path(config["paths"]["output"])
+
+    logger.info("Modo autônomo. Buscando cortes pendentes no Supabase...")
+    pending_cuts = supabase_client.get_cuts_by_status("pending")
+
+    if not pending_cuts:
+        logger.info("Nenhum corte 'pending' aguardando exportação no banco.")
+        return []
+
+    approved_files = []
+
+    for cut in pending_cuts:
+        video_code = cut.get("videos", {}).get("video_code")
+        cut_index = cut.get("cut_index")
+
+        if not video_code:
+            continue
+
+        video = input_dir / f"{video_code}_cut_{cut_index:02d}.mp4"
+        if not video.exists():
+            logger.warning(
+                f"Arquivo físico não encontrado para o corte {video_code}_{cut_index:02d}. mp4 ausente em {input_dir}"
+            )
+            continue
+
+        logger.info(f"Processando corte pendente: {video.name}")
+
+        try:
+            output_file, audit = export_to_shorts(
+                video, profile_settings=profile_settings
+            )
+
+            if audit and not audit.get("is_approved", False):
+                logger.error(f"❌ VÍDEO REPROVADO NO GATEKEEPER: {output_file.name}")
+                q_dir = quarantine_video(
+                    output_file,
+                    reason=" | ".join(
+                        audit.get("reasons", audit.get("recommendations", []))
+                    ),
+                )
+                supabase_client.update_cut_status(video_code, cut_index, "quarantined")
+                if q_dir:
+                    logger.warning(f"⚠️  Vídeo movido para QUARENTENA: {q_dir}")
+                if "recommendations" in audit:
+                    print(f"\n💡 RECOMENDAÇÕES:\n{audit['recommendations']}")
+            else:
+                approved_files.append(output_file)
+                overall_score = audit.get("overall_score") if audit else None
+                viral_potential = audit.get("viral_potential") if audit else None
+
+                # Marca como exportado
+                supabase_client.update_cut_status(video_code, cut_index, "exported")
+                supabase_client.register_export(
+                    video_code=video_code,
+                    cut_index=cut_index,
+                    filepath=str(output_file.absolute()),
+                    overall_score=overall_score,
+                    viral_potential=viral_potential,
+                    gatekeeper_approved=True,
+                )
+                logger.info(
+                    f"✅ Exportação registrada no Supabase e finalizada: {output_file.name}"
+                )
+
+        except Exception as e:
+            logger.error(f"Erro ao processar autonômo {video.name}: {e}")
+            supabase_client.update_cut_status(video_code, cut_index, "failed")
             continue
 
     return approved_files
@@ -775,14 +894,14 @@ def main():
         video_path = Path(args.video)
         videos_to_export = [video_path]
     else:
-        # Padrão: exportar todos
+        # Padrão: autônomo baseado no Supabase
         logger.info(
-            f"Modo padrão com perfil '{args.profile}': exportando todos os cortes..."
+            f"Modo padrão com perfil '{args.profile}': exportando cortes pendentes no Supabase..."
         )
         try:
-            output_files = batch_export(profile_settings=settings)
-            print(f"\n✓ Exportação concluída!")
-            print(f"Total de Shorts criados: {len(output_files)}")
+            output_files = run_autonomous_export(profile_settings=settings)
+            print(f"\n✓ Processamento autônomo concluído!")
+            print(f"Total de Shorts aprovados: {len(output_files)}")
 
             for i, file in enumerate(output_files, 1):
                 size_mb = file.stat().st_size / (1024 * 1024)
@@ -798,16 +917,31 @@ def main():
 
     # Exportar vídeos individuais
     try:
+        from scripts.tools.video_quarantine import quarantine_video
+
         for video_path in videos_to_export:
             logger.info(f"Processando com perfil '{args.profile}': {video_path}")
             output_file, audit = export_to_shorts(video_path, profile_settings=settings)
 
             size_mb = output_file.stat().st_size / (1024 * 1024)
-            print(f"\n✓ Short criado com sucesso!")
-            print(f"Arquivo: {output_file}")
-            print(f"Tamanho: {size_mb:.1f} MB")
 
-        print(f"\n✓ Exportação concluída!")
+            if audit and not audit.get("is_approved", False):
+                logger.error(f"❌ VÍDEO REPROVADO NO GATEKEEPER: {output_file.name}")
+                q_dir = quarantine_video(
+                    output_file,
+                    reason=" | ".join(
+                        audit.get("reasons", audit.get("recommendations", []))
+                    ),
+                )
+                print(f"\n❌ Short REPROVADO e enviado para quarentena!")
+                if q_dir:
+                    print(f"Quarentena: {q_dir}")
+            else:
+                print(f"\n✓ Short criado com sucesso!")
+                print(f"Arquivo: {output_file}")
+                print(f"Tamanho: {size_mb:.1f} MB")
+
+        print(f"\n✓ Processamento de vídeos individuais concluído!")
 
     except Exception as e:
         logger.error(f"Erro fatal: {e}", exc_info=True)

@@ -128,14 +128,50 @@ def main():
     args = parser.parse_args()
 
     if not args.url:
-        print("Uso: python 1_download.py <URL_DO_YOUTUBE> [--profile profile_name]")
-        sys.exit(1)
+        from scripts.utils import supabase_client
+
+        logger.info("Nenhuma URL fornecida via CLI. Buscando fila no Supabase...")
+        videos_pendentes = supabase_client.get_videos_by_stage("discovered")
+
+        if not videos_pendentes:
+            logger.info("Nenhum vídeo pendente de download ('discovered') no banco.")
+            sys.exit(0)
+
+        for v in videos_pendentes:
+            url = v.get("url")
+            video_code = v.get("video_code")
+            logger.info(
+                f"==> Iniciando download automático: {v.get('title')} ({video_code})"
+            )
+            try:
+                video_path = download_video(url)
+                logger.info(f"[SUCCESS] Video baixado com sucesso: {video_path}")
+                supabase_client.update_video_stage(video_code, "downloaded")
+                logger.info(f"Status no Supabase atualizado para 'downloaded'.")
+            except Exception as e:
+                logger.error(f"Erro ao baixar {url}: {e}", exc_info=True)
+                supabase_client.update_video_stage(
+                    video_code, "failed", error_log=str(e)
+                )
+
+        logger.info("\n✓ Fila de downloads concluída!")
+        print(f"\nProximo passo: python scripts/2_transcribe.py")
+        sys.exit(0)
 
     url = args.url
 
     try:
         video_path = download_video(url)
         print(f"\n[SUCCESS] Video baixado com sucesso: {video_path}")
+        # Optionally extract video_code to update manual status
+        import re
+
+        match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url)
+        if match:
+            from scripts.utils import supabase_client
+
+            supabase_client.update_video_stage(match.group(1), "downloaded")
+
         print(f"\nProximo passo: python scripts/2_transcribe.py")
 
     except Exception as e:

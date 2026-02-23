@@ -34,6 +34,7 @@ if hasattr(np, "core"):
 # Adicionar o diretório raiz ao path para permitir imports de scripts.*
 sys.path.append(str(Path(__file__).parent.parent))
 from scripts.utils.video_qa import check_video_for_subtitles
+from scripts.utils.subtitle_qa import SubtitleAuditor
 
 # Configurar logging
 logging.basicConfig(
@@ -439,6 +440,19 @@ def transcribe_video(
 
     logger.info(f"Total de segmentos: {len(transcript_data['segments'])}")
 
+    # --- NOVO: QA DE LEGENDAS (HALLUCINATION CHECK) ---
+    logger.info(
+        "Iniciando auditoria de qualidade das legendas (Hallucination Check)..."
+    )
+    auditor = SubtitleAuditor(config=config)
+    audit_report = auditor.audit_transcript(transcript_data)
+    transcript_data["audit_report"] = audit_report
+
+    if not audit_report["is_healthy"]:
+        logger.warning(
+            f"⚠️  ALERTA DE QUALIDADE: Transcrição detectada como instável (Hallucination Ratio: {audit_report['hallucination_ratio']:.2%})"
+        )
+
     # Salvar transcrição
     output_file = output_dir / f"{video_path.stem}_transcript.json"
     with open(output_file, "w", encoding="utf-8") as f:
@@ -481,8 +495,66 @@ def main():
     if args.video_path:
         video_path = Path(args.video_path)
     else:
-        logger.info("Nenhum vídeo especificado, buscando o mais recente...")
-        video_path = find_latest_video()
+        from scripts.utils import supabase_client
+
+        logger.info(
+            "Nenhum vídeo especificado via CLI. Buscando fila no Supabase ('downloaded')..."
+        )
+        videos_pendentes = supabase_client.get_videos_by_stage("downloaded")
+
+        if not videos_pendentes:
+            logger.info("Nenhum vídeo pendente de transcrição ('downloaded') no banco.")
+            sys.exit(0)
+
+        for v in videos_pendentes:
+            video_code = v.get("video_code")
+            config = load_config()
+            raw_dir = Path(config["paths"]["raw_videos"])
+            video_path = raw_dir / f"{video_code}.mp4"
+
+            if not video_path.exists():
+                logger.error(
+                    f"Vídeo {video_code} não encontrado no disco local: {video_path}"
+                )
+                supabase_client.update_video_stage(
+                    video_code,
+                    "failed",
+                    error_log="Arquivo não encontrado no disco local",
+                )
+                continue
+
+            logger.info(
+                f"==> Iniciando transcrição automática: {v.get('title')} ({video_code})"
+            )
+
+            try:
+                transcript = transcribe_video(
+                    video_path, min_speakers=args.min_speakers
+                )
+
+                if (
+                    isinstance(transcript, dict)
+                    and transcript.get("status") == "skipped"
+                ):
+                    print(f"\n⚠️  VÍDEO PULADO: {transcript.get('reason')}")
+                    supabase_client.update_video_stage(
+                        video_code,
+                        "failed",
+                        error_log=f"Skipped QA: {transcript.get('reason')}",
+                    )
+                else:
+                    logger.info(f"[SUCCESS] Transcrição concluída: {video_path}")
+                    supabase_client.update_video_stage(video_code, "transcribed")
+                    logger.info("Status no Supabase atualizado para 'transcribed'.")
+            except Exception as e:
+                logger.error(f"Erro ao transcrever {video_path}: {e}", exc_info=True)
+                supabase_client.update_video_stage(
+                    video_code, "failed", error_log=str(e)
+                )
+
+        logger.info("\n✓ Fila de transcrições concluída!")
+        print(f"\nProximo passo: python scripts/3_analyze.py")
+        sys.exit(0)
 
     try:
         logger.info(f"Processando: {video_path}")
@@ -491,7 +563,19 @@ def main():
         if isinstance(transcript, dict) and transcript.get("status") == "skipped":
             print(f"\n⚠️  VÍDEO PULADO: {transcript.get('reason')}")
             print(f"Confiança da detecção: {transcript.get('confidence', 0):.2f}")
+            from scripts.utils import supabase_client
+
+            supabase_client.update_video_stage(
+                video_path.stem,
+                "failed",
+                error_log=f"Skipped: {transcript.get('reason')}",
+            )
             sys.exit(0)  # Exit success but it was a skip
+
+        # Update specific manual task to "transcribed"
+        from scripts.utils import supabase_client
+
+        supabase_client.update_video_stage(video_path.stem, "transcribed")
 
         print(f"\n✓ Transcrição concluída!")
         print(f"Segmentos: {len(transcript.get('segments', []))}")

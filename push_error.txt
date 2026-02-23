@@ -1,0 +1,67 @@
+remote: error: GH013: Repository rule violations found for refs/heads/main.        
+remote: 
+remote: - GITHUB PUSH PROTECTION        
+remote:   ÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇö        
+remote:     Resolve the following violations before pushing again        
+remote: 
+remote:     - Push cannot contain secrets        
+remote: 
+remote:             
+remote:      (?) Learn how to resolve a blocked push        
+remote:      https://docs.github.com/code-security/secret-scanning/working-with-secret-scanning-and-push-protection/working-with-push-protection-from-the-command-line#resolving-a-blocked-push        
+remote:             
+remote:             
+remote:       ÔÇöÔÇö Hugging Face User Access Token ÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇö        
+remote:        locations:        
+remote:          - commit: d098553bf81c25701f48c02616dcb5af05adc605        
+remote:            path: .env:1        
+remote:             
+remote:        (?) To push, remove secret from commit(s) or follow this URL to allow the secret.        
+remote:        https://github.com/Rafael-Gaioti/youtube-shorts-automated/security/secret-scanning/unblock-secret/3A1I4sJwLbtSAflmvIZdYf1UoXa        
+remote:             
+remote:             
+remote:       ÔÇöÔÇö Google OAuth Access Token ÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇö        
+remote:        locations:        
+remote:          - commit: 45370d3493b2bec0f3aec5a5bc7553ea851e0049        
+remote:            path: config/youtube_metrics_token.json:1        
+remote:             
+remote:        (?) To push, remove secret from commit(s) or follow this URL to allow the secret.        
+remote:        https://github.com/Rafael-Gaioti/youtube-shorts-automated/security/secret-scanning/unblock-secret/3A1I4thGxNnuA8dmvjH9K3uIgGa        
+remote:             
+remote:             
+remote:       ÔÇöÔÇö Google OAuth Refresh Token ÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇö        
+remote:        locations:        
+remote:          - commit: 45370d3493b2bec0f3aec5a5bc7553ea851e0049        
+remote:            path: config/youtube_metrics_token.json:1        
+remote:             
+remote:        (?) To push, remove secret from commit(s) or follow this URL to allow the secret.        
+remote:        https://github.com/Rafael-Gaioti/youtube-shorts-automated/security/secret-scanning/unblock-secret/3A1I4pthzvldE9q1zFcw2g58oNX        
+remote:             
+remote:             
+remote:       ÔÇöÔÇö Google OAuth Client ID ÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇö        
+remote:        locations:        
+remote:          - commit: 45370d3493b2bec0f3aec5a5bc7553ea851e0049        
+remote:            path: config/youtube_metrics_token.json:1        
+remote:             
+remote:        (?) To push, remove secret from commit(s) or follow this URL to allow the secret.        
+remote:        https://github.com/Rafael-Gaioti/youtube-shorts-automated/security/secret-scanning/unblock-secret/3A1I4pTTTLQORtxJfXTN6G2hVs0        
+remote:             
+remote:             
+remote:       ÔÇöÔÇö Google OAuth Client Secret ÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇö        
+remote:        locations:        
+remote:          - commit: 45370d3493b2bec0f3aec5a5bc7553ea851e0049        
+remote:            path: config/youtube_metrics_token.json:1        
+remote:             
+remote:        (?) To push, remove secret from commit(s) or follow this URL to allow the secret.        
+remote:        https://github.com/Rafael-Gaioti/youtube-shorts-automated/security/secret-scanning/unblock-secret/3A1I4sPJCtZczyqso99DwjCwQxC        
+remote:             
+remote:             
+remote:     ÔÇöÔÇö[ WARNING ]ÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇö        
+remote:      1 more secrets detected. Remove each secret from your commit history to view more detections.        
+remote:      https://docs.github.com/code-security/secret-scanning/using-advanced-secret-scanning-and-push-protection-features/excluding-folders-and-files-from-secret-scanning        
+remote:     ÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇöÔÇö        
+remote: 
+remote: 
+To github-unflow:Rafael-Gaioti/youtube-shorts-automated.git
+ ! [remote rejected] main -> main (push declined due to repository rule violations)
+error: failed to push some refs to 'github-unflow:Rafael-Gaioti/youtube-shorts-automated.git'

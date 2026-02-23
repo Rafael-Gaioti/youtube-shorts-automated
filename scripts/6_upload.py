@@ -344,6 +344,95 @@ def save_upload_record(video_id: str, cut_index: int, result: dict, analysis: di
     logger.info(f"   Registro salvo em: {record_path}")
 
 
+def run_autonomous_upload(
+    profile_settings, privacy="private", dry_run=False, target_count=2
+):
+    """Lê os vídeos 'exported' do banco de dados e realiza o upload."""
+    from scripts.utils import supabase_client
+
+    logger.info("Modo autônomo. Buscando shorts exportados no Supabase...")
+    exported_cuts = supabase_client.get_cuts_by_status("exported")
+
+    if not exported_cuts:
+        logger.info("Nenhum short 'exported' aguardando upload no banco.")
+        return
+
+    youtube = None
+    if not dry_run:
+        youtube = get_authenticated_service()
+
+    analysis_dir = Path("data/analysis")
+    shorts_dir = Path("data/shorts")
+    results = []
+
+    # Limitar quantidade diária de uploads aqui
+    if target_count:
+        exported_cuts = exported_cuts[:target_count]
+
+    for cut_record in exported_cuts:
+        video_code = cut_record.get("videos", {}).get("video_code")
+        cut_index = cut_record.get("cut_index")
+
+        if not video_code:
+            continue
+
+        analysis_path = analysis_dir / f"{video_code}_analysis.json"
+        if not analysis_path.exists():
+            logger.error(f"Analysis file missing: {analysis_path}. Pulando.")
+            continue
+
+        with open(analysis_path, "r", encoding="utf-8") as f:
+            analysis = json.load(f)
+
+        cuts = analysis.get("cuts", [])
+        actual_idx = cut_index - 1
+        if actual_idx < 0 or actual_idx >= len(cuts):
+            logger.error(f"Cut {cut_index} invalid length {len(cuts)}")
+            continue
+
+        cut = cuts[actual_idx]
+
+        # Padrão 1
+        short_path = shorts_dir / f"{video_code}_cut_{cut_index:02d}_short.mp4"
+
+        # Padrão 2
+        if not short_path.exists():
+            thumb_hook = cut.get("thumbnail_hook", "")
+            if thumb_hook:
+                base_name = (
+                    thumb_hook.replace(" ", "-")
+                    .replace("?", "")
+                    .replace("!", "")
+                    .replace(".", "")
+                    .upper()
+                )
+                alt_path = shorts_dir / f"{base_name}_C{cut_index:02d}.mp4"
+                if alt_path.exists():
+                    short_path = alt_path
+
+        if not short_path.exists():
+            logger.warning(f"Short não encontrado: {short_path.name} — pulando.")
+            continue
+
+        result = upload_short(
+            youtube, short_path, cut, privacy, profile_settings, dry_run
+        )
+
+        if result:
+            save_upload_record(video_code, actual_idx, result, analysis)
+            results.append(result)
+            supabase_client.update_cut_status(video_code, cut_index, "uploaded")
+            logger.info(
+                f"✅ Status do short {video_code}_{cut_index:02d} atualizado para 'uploaded' no banco!"
+            )
+
+        if len(exported_cuts) > 1:
+            logger.info("   Aguardando 5s antes do próximo upload...")
+            time.sleep(5)
+
+    logger.info(f"\nUPLOADS AUTÔNOMOS CONCLUÍDOS: {len(results)}/{len(exported_cuts)}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Upload de Shorts para o YouTube")
     parser.add_argument(
@@ -373,24 +462,40 @@ def main():
         action="store_true",
         help="Simular upload sem enviar nada",
     )
+    parser.add_argument(
+        "--auth",
+        action="store_true",
+        help="Apenas realizar a autenticação OAuth2 e sair",
+    )
     args = parser.parse_args()
 
-    # Carregar analysis.json
-    if args.analysis_file:
-        analysis_path = Path(args.analysis_file)
-    else:
-        # Usar o mais recente
-        analysis_dir = Path("data/analysis")
-        files = sorted(
-            analysis_dir.glob("*_analysis.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
+    # Carregar configurações do Perfil para usar depois
+    from scripts.utils import settings_manager
+
+    settings = settings_manager.get_settings(args.profile)
+
+    # Modo apenas Autenticação
+    if args.auth:
+        logger.info("Modo Autenticação selecionado.")
+        get_authenticated_service()
+        logger.info("✅ Autenticação concluída com sucesso!")
+        sys.exit(0)
+
+    # Modo autônomo baseado no Supabase
+    if not args.analysis_file:
+        logger.info(
+            "Nenhum arquivo de análise especificado. Iniciando Modo Autônomo..."
         )
-        if not files:
-            logger.error("Nenhum analysis.json encontrado em data/analysis/")
-            sys.exit(1)
-        analysis_path = files[0]
-        logger.info(f"Usando analysis mais recente: {analysis_path.name}")
+        run_autonomous_upload(
+            profile_settings=settings,
+            privacy=args.privacy,
+            dry_run=args.dry_run,
+            target_count=2,
+        )
+        sys.exit(0)
+
+    # Carregar analysis.json explicitamente
+    analysis_path = Path(args.analysis_file)
 
     if not analysis_path.exists():
         logger.error(f"Arquivo não encontrado: {analysis_path}")
@@ -430,7 +535,23 @@ def main():
     results = []
 
     for cut_idx, cut in cuts_to_upload:
+        # Padrão 1: vídeo_id_cut_01_short.mp4 (Clássico)
         short_path = shorts_dir / f"{video_id}_cut_{cut_idx + 1:02d}_short.mp4"
+
+        # Padrão 2: HOOK-NAME_C01.mp4 (Novo Estilo Human-Readable do 5_export.py)
+        if not short_path.exists():
+            thumb_hook = cut.get("thumbnail_hook", "")
+            if thumb_hook:
+                base_name = (
+                    thumb_hook.replace(" ", "-")
+                    .replace("?", "")
+                    .replace("!", "")
+                    .replace(".", "")
+                    .upper()
+                )
+                alt_path = shorts_dir / f"{base_name}_C{cut_idx + 1:02d}.mp4"
+                if alt_path.exists():
+                    short_path = alt_path
 
         if not short_path.exists():
             logger.warning(f"Short não encontrado: {short_path.name} — pulando.")

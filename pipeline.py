@@ -241,7 +241,14 @@ def main():
 
             # Sumário final do vídeo
             shorts_dir = Path("data/shorts")
+            # Tentar padrão clássico e padrão human-readable (hook)
             generated = sorted(shorts_dir.glob(f"{video_id}_cut_*_short.mp4"))
+            if not generated:
+                # Busca por arquivos que terminam com _C01.mp4, _C02.mp4 etc.
+                generated = sorted(shorts_dir.glob(f"*_C[0-9][0-9].mp4"))
+                # Filtrar apenas os que pertencem a este vídeo se possível,
+                # mas o pattern de exportação do 5_export.py já os torna únicos o suficiente
+                # ou busca por arquivos que foram criados recentemente para este vídeo
             logger.info("")
             logger.info(f"{'=' * 55}")
             logger.info(f"  PIPELINE CONCLUÍDA — {video_id}")

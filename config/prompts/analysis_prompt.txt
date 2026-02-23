@@ -41,10 +41,15 @@ Crie obrigatoriamente um campo `youtube_title` (máx. 8 palavras).
 2. **Curiosidade Direta:** "A regra número 1 para [Benefício Final]" ou "Como [Referência de Sucesso] pensa"
 3. **Dor Imediata:** "Se você faz [Erro Comum], vai [Pior Consequência]"
 
-🎯 **THUMBNAIL_HOOK (REGRAS CRÍTICAS):**
-- MÁXIMO 4 PALAVRAS. Letras Maiúsculas.
-- Use palavras de **Micro-Choque Cognitivo** (ex: "ERRO FATAL", "VAI FALIR", "PARE AGORA").
-- Ele DEVE complementar a tensão do YouTube Title, e NUNCA ser o mesmo texto.
+🎯 **CONTENT_TYPE (CATEGORIZAÇÃO TÁTICA):**
+Selecione a categoria que melhor descreve o gatilho emocional do corte:
+- `financial_mistake`: Erros que custam dinheiro ou tempo.
+- `success_revelation`: Segredos de quem chegou lá.
+- `dramatic_transformation`: Mudanças radicais de vida/corpo.
+- `controversial_opinion`: Opiniões que dividem águas.
+- `emotional_breakdown`: Momentos de vulnerabilidade ou superação.
+- `behind_the_scenes`: O que acontece nos bastidores.
+- `insight`: Uma ideia pura e poderosa.
 
 FORMATO DE SAÍDA (JSON válido):
 
@@ -55,6 +60,7 @@ FORMATO DE SAÍDA (JSON válido):
     "duration": 31.5,
     "viral_score": 9.2,
     "hook_strength": 9,
+    "content_type": "financial_mistake",
     "opening_pattern": "contrarian",
     "youtube_title": "O único hábito que bilionários usam todo dia",
     "thumbnail_hook": "HÁBITO BILIONÁRIO",

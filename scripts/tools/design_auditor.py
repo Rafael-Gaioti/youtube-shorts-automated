@@ -4,6 +4,8 @@ import json
 import logging
 import csv
 from pathlib import Path
+from scripts.utils.subtitle_qa import SubtitleAuditor
+from scripts.tools.semantic_auditor import SemanticAuditor
 from datetime import datetime
 import yaml
 from dotenv import load_dotenv
@@ -81,7 +83,15 @@ class DesignAuditor:
         if not image_path.exists():
             return {"score": 0, "error": "file_not_found"}
 
-        img = cv2.imread(str(image_path))
+        # Fix OpenCV UTF-8 path reading on Windows
+        try:
+            import numpy as np
+
+            img_array = np.fromfile(str(image_path), np.uint8)
+            img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        except Exception:
+            img = None
+
         if img is None:
             return {"score": 0, "error": "invalid_image"}
 
@@ -106,8 +116,9 @@ class DesignAuditor:
             occ_score = 10
 
         # 1.2 Detecção de Colisão de Borda (Safe Zone Check)
-        # Margens de 5% nas laterais e 10% topo/base
-        margin_w = int(w * 0.05)
+        # Margens aumentadas para 12% nas laterais (espaço para botões/UI do Shorts)
+        # e 10% topo/base
+        margin_w = int(w * 0.12)
         margin_h = int(h * 0.10)
 
         has_collision = False
@@ -138,14 +149,13 @@ class DesignAuditor:
                 cv2.rectangle(debug_img, (x, y), (x + cw, y + ch), (0, 255, 0), 3)
 
                 # Checar se este bounding box invade as margens com uma pequena tolerância
-                # (o stroke da fonte dilatada pode encostar marginalmente, permitimos ~1.5% de 'vazamento')
                 leak_tolerance_w = int(w * 0.015)
                 leak_tolerance_h = int(h * 0.015)
 
                 hits_left = x < (margin_w - leak_tolerance_w)
                 hits_right = (x + cw) > (w - margin_w + leak_tolerance_w)
                 hits_top = y < (margin_h - leak_tolerance_h)
-                hits_bottom = (y + ch) > (h - margin_h + leak_tolerance_h)
+                hits_bottom = (h - margin_h + leak_tolerance_h) < (y + ch)
 
                 if hits_left or hits_right:
                     has_collision = True
@@ -157,6 +167,16 @@ class DesignAuditor:
                     occ_score -= 3
                     issues.append(
                         "Texto da thumbnail encostando no topo ou base (Safe Zone)"
+                    )
+
+                # HEURÍSTICA: Detecção de "Texto Estilhaçado" (Palavra cortada)
+                # Se o bloco de texto for muito alto e estreito, pode ser uma letra ou sílaba isolada
+                # Razão de aspecto (H/W) > 1.2 em um bloco pequeno é suspeito para o estilo colossal
+                aspect_ratio = ch / cw if cw > 0 else 0
+                if aspect_ratio > 1.2 and area < (w * h * 0.05):
+                    occ_score -= 2
+                    issues.append(
+                        f"Possível palavra estilhaçada/cortada detectada (Aspect Ratio: {aspect_ratio:.1f})"
                     )
 
         cv2.imwrite("thumb_debug.jpg", debug_img)
@@ -320,7 +340,7 @@ class DesignAuditor:
             logger.warning(f"Erro no Hook Audit: {e}")
             return {"score": 5, "error": str(e)}
 
-    def analyze_hook_text(self, transcript_path: Path):
+    def analyze_hook_text(self, transcript_path: Path, cut_start: float = 0.0):
         """Camada 2.1: Qualidade Semântica do Hook (As primeiras palavras são gatilhos?)"""
         if not transcript_path or not transcript_path.exists():
             return {"hook_text": "N/A", "has_filler": False}
@@ -329,13 +349,14 @@ class DesignAuditor:
             with open(transcript_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            # Pegar as palavras dos primeiros 3 segundos
+            # Pegar as palavras dos primeiros 3 segundos do corte
             # Suporta tanto análise direta (.json) quanto transcript whisper
             segments = data.get("segments", []) or data.get("results", [])
             first_words = []
             for seg in segments:
                 start = seg.get("start", 0)
-                if start < 3.0:
+                # Verifica se o segmento começa logo após o início do corte (com margem de erro)
+                if cut_start - 0.5 <= start <= cut_start + 3.0:
                     first_words.append(seg.get("text", ""))
 
             hook_text = " ".join(first_words).strip()
@@ -433,6 +454,57 @@ class DesignAuditor:
         ) / 2
         return results
 
+    def analyze_content_fidelity(self, transcript_path: Path, texts: list):
+        """Camada 6: Fidelidade de Conteúdo (Evitar Alucinações em Títulos/Hooks)"""
+        if not transcript_path or not transcript_path.exists() or not texts:
+            return {"score": 10, "issues": []}
+
+        try:
+            with open(transcript_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Extrair todas as palavras da transcrição
+            transcript_text = ""
+            segments = data.get("segments", [])
+            for seg in segments:
+                transcript_text += " " + seg.get("text", "")
+
+            transcript_text = transcript_text.lower()
+
+            hallucinated_words = set()
+            import re
+
+            for text in texts:
+                if not text:
+                    continue
+                # Limpar texto e tokenizar
+                clean_text = re.sub(r"[^\w\s]", "", text.lower())
+                # Ignorar palavras funcionais curtas para evitar falsos positivos
+                words = [w for w in clean_text.split() if len(w) > 3]
+
+                for word in words:
+                    if word not in transcript_text:
+                        hallucinated_words.add(word)
+
+            score = 10
+            issues = []
+            if hallucinated_words:
+                # Penalidade severa: 5 pontos por palavra (2 palavras = falha total)
+                penalty = len(hallucinated_words) * 5
+                score = max(0, 10 - penalty)
+                issues.append(
+                    f"Palavras não encontradas no áudio: {', '.join(hallucinated_words)}"
+                )
+
+            return {
+                "score": score,
+                "hallucinated_words": list(hallucinated_words),
+                "issues": issues,
+            }
+        except Exception as e:
+            logger.warning(f"Erro no Content Fidelity Audit: {e}")
+            return {"score": 5, "error": str(e)}
+
     def generate_llm_diagnosis(self, raw_results: dict):
         """Camada 4: Cérebro Audit (Removido LLM - Agora é Algorítmico 0 custo)"""
         try:
@@ -472,6 +544,13 @@ class DesignAuditor:
                     "O Texto do Header ultrapassou os limites e invadiu a borda da tela (Colisão Grave)."
                 )
 
+            if raw_results.get("fidelity", {}).get("score", 10) < 5.0:
+                is_approved = False  # Hard Fail for hallucinations
+                fidelity_issues = raw_results.get("fidelity", {}).get("issues", [])
+                recommendations.append(
+                    f"Headline inconsistente com o áudio: {fidelity_issues[0] if fidelity_issues else 'Alucinação detectada.'}"
+                )
+
             if not recommendations:
                 recommendations.append("Todas as métricas técnicas estão excelentes.")
                 diagnosis_text = "Vídeo aprovado e pronto para publicação."
@@ -508,6 +587,9 @@ class DesignAuditor:
         ass_path: Path = None,
         headline: str = "",
         headline_fontsize: int = None,
+        transcript_path: Path = None,
+        cut_start: float = 0.0,
+        **kwargs,
     ):
         """Orquestra todas as camadas e salva no ledger."""
         logger.info(f"Iniciando Auditoria Científica: {video_id}")
@@ -517,19 +599,25 @@ class DesignAuditor:
         rhythm_results = self.analyze_rhythm(video_path)
         hook_results = self.analyze_hook(video_path)
 
-        # Integrar análise semântica do Hook (Task 7)
-        transcript_json = video_path.with_name(
-            video_id.split("_cut_")[0] + "_transcript.json"
-        )
-        if not transcript_json.exists():
-            # Tenta localização alternativa se for pipeline direta
-            transcript_json = (
-                video_path.parent.parent
-                / "analysis"
-                / f"{video_id.split('_cut_')[0]}_analysis.json"
+        # 2. Identificar Transcrição
+        if transcript_path and transcript_path.exists():
+            transcript_json = transcript_path
+        else:
+            # Fallback heuristic
+            transcript_json = video_path.with_name(
+                video_id.split("_cut_")[0] + "_transcript.json"
             )
+            if not transcript_json.exists():
+                # Tenta localização alternativa se for pipeline direta
+                transcript_json = (
+                    video_path.parent.parent
+                    / "analysis"
+                    / f"{video_id.split('_cut_')[0]}_analysis.json"
+                )
 
-        hook_results["text_quality"] = self.analyze_hook_text(transcript_json)
+        hook_results["text_quality"] = self.analyze_hook_text(
+            transcript_json, cut_start
+        )
 
         if not ass_path:
             ass_path = video_path.with_suffix(".ass")
@@ -549,17 +637,50 @@ class DesignAuditor:
             + graphics_results.get("score", 0) * 0.15
         )
 
+        # 5. CONTENT QUALITY CHECKS (Fidelity & Semantic)
+        # 5.1 Fidelity Analysis (Transcript vs AI Titles)
+        logger.info(f"Running FIDELITY check for {video_id}...")
+
+        # Coletar textos para auditoria
+        audit_list = [headline]
+        if kwargs.get("youtube_title"):
+            audit_list.append(kwargs.get("youtube_title"))
+        if kwargs.get("thumb_hook"):
+            audit_list.append(kwargs.get("thumb_hook"))
+
+        fidelity_report = self.analyze_content_fidelity(
+            transcript_path, texts=audit_list
+        )
+
+        # 5.2 Semantic Analysis (Logic Check)
+        logger.info(f"Running SEMANTIC check for {video_id}...")
+        semantic_auditor = SemanticAuditor()
+        semantic_results = {
+            "is_coherent": True,
+            "sanity_score": 10.0,
+            "detected_issues": [],
+        }
+
+        if transcript_path and transcript_path.exists():
+            with open(transcript_path, "r", encoding="utf-8") as f:
+                t_data = json.load(f)
+                semantic_results = semantic_auditor.audit_cut_transcript(
+                    t_data.get("segments", [])
+                )
+
         raw_results = {
             "thumbnail": thumb_results,
             "rhythm": rhythm_results,
             "hook": hook_results,
             "subtitles": sub_results,
             "graphics": graphics_results,
+            "fidelity": fidelity_report,
+            "semantic": semantic_results,
             "overall_score": round(overall, 2),
-            "viral_potential": "UNKNOWN",  # Será refinado pela LLM
+            "viral_potential": "UNKNOWN",
         }
 
-        # 3. Diagnóstico via LLM
+        # 6. Diagnosis and Final Decision
         diagnosis_data = self.generate_llm_diagnosis(raw_results)
 
         final_results = {
@@ -573,10 +694,27 @@ class DesignAuditor:
             ),
         }
 
-        # 4. Salvar no Ledger
+        # AGGRESSIVE REJECT: If fidelity or semantic fails, force REPROVADO
+        if fidelity_report.get("fidelity_score", 10.0) < 7.0:
+            final_results["is_approved"] = False
+            final_results["recommendations"] = (
+                final_results.get("recommendations", "")
+                + "\n❌ REPROVADO: Alucinação de conteúdo detectada!"
+            )
+            final_results["overall_score"] = min(final_results["overall_score"], 4.0)
+
+        if semantic_results.get("sanity_score", 10.0) < 7.0:
+            final_results["is_approved"] = False
+            final_results["recommendations"] = (
+                final_results.get("recommendations", "")
+                + "\n❌ REPROVADO: Ilogia ou repetição detectada na transcrição!"
+            )
+            final_results["overall_score"] = min(final_results["overall_score"], 4.0)
+
+        # 7. Salvar no Ledger
         self._save_to_ledger(video_id, final_results)
 
-        # 5. Salvar JSON individual para o vídeo
+        # 8. Salvar JSON individual para o vídeo
         json_path = video_path.with_suffix(".audit.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(final_results, f, indent=2, ensure_ascii=False)

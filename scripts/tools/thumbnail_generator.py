@@ -129,11 +129,36 @@ def generate_thumbnail(
                 except IOError:
                     font = ImageFont.load_default()
 
-            # 4. Quebra de linha (Wrap agressivo para Max 2-3 linhas)
-            max_chars = 8 if font_size >= 230 else 10
-            lines = textwrap.wrap(text.upper(), width=max_chars)[
-                :3
-            ]  # Aumentado para 3 linhas se necessário para ocupar mais área
+            # 4. Quebra de linha (No splitting words)
+            max_chars = 10 if font_size >= 230 else 12
+            raw_lines = textwrap.wrap(
+                text.upper(), width=max_chars, break_long_words=False
+            )
+            lines = raw_lines[:3]
+
+            # Dynamic Font Scaling: Ensure the longest line fits horizontally
+            # Margin of 12% on each side (Shorts safe zone)
+            max_allowed_width = width * 0.85
+
+            while font_size > 80:
+                longest_line_w = 0
+                for line in lines:
+                    bbox = draw.textbbox((0, 0), line, font=font)
+                    w = bbox[2] - bbox[0]
+                    if w > longest_line_w:
+                        longest_line_w = w
+
+                if longest_line_w <= max_allowed_width:
+                    break
+
+                # Shrink font and re-wrap if necessary
+                font_size -= 10
+                font = ImageFont.truetype(font_name, font_size)
+                # Re-wrap with slightly more chars as font gets smaller
+                max_chars = int(max_chars * 1.1)
+                lines = textwrap.wrap(
+                    text.upper(), width=max_chars, break_long_words=False
+                )[:3]
 
             line_spacing = int(font_size * 0.22)
             # Altura total estimada para a caixa de texto

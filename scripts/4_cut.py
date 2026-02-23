@@ -59,6 +59,19 @@ def cut_video(
         output_dir = Path(config["paths"]["output"])
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Sanetização: Remover cortes antigos deste vídeo para evitar desalinhamento com a nova análise
+    video_id = video_path.stem
+    old_cuts = list(output_dir.glob(f"{video_id}_cut_*.mp4"))
+    if old_cuts:
+        logger.info(
+            f"Limpando {len(old_cuts)} cortes antigos de {video_id} em {output_dir}"
+        )
+        for old_cut in old_cuts:
+            try:
+                old_cut.unlink()
+            except Exception as e:
+                logger.warning(f"Não foi possível remover {old_cut}: {e}")
+
     # Carregar análise
     with open(analysis_path, "r", encoding="utf-8") as f:
         analysis_data = json.load(f)
@@ -154,6 +167,87 @@ def find_latest_analysis() -> tuple[Path, Path]:
     return video_path, latest_analysis
 
 
+def run_autonomous_cuts():
+    """Runs cuts for all pending cuts in Supabase autonomously."""
+    from scripts.utils import supabase_client
+
+    logger.info("Modo autônomo. Buscando todos os cortes pendentes no Supabase...")
+    pending_cuts = supabase_client.get_cuts_by_status("pending")
+
+    if not pending_cuts:
+        logger.info("Nenhum corte pendente de edição ('pending') no banco.")
+        return
+
+    config = load_config()
+    raw_dir = Path(config["paths"]["raw_videos"])
+    output_dir = Path(config["paths"]["output"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for cut in pending_cuts:
+        video_code = cut.get("videos", {}).get("video_code")
+        title = cut.get("videos", {}).get("title")
+        cut_index = cut.get("cut_index")
+        start_time = cut.get("start_time")
+        end_time = cut.get("end_time")
+        duration = end_time - start_time
+
+        if not video_code:
+            logger.warning(
+                f"Corte {cut.get('id')} não possui relacionamento com vídeo associado."
+            )
+            continue
+
+        video_path = raw_dir / f"{video_code}.mp4"
+        if not video_path.exists():
+            logger.error(f"Vídeo fonte não encontrado na raw_videos: {video_path}")
+            continue
+
+        output_file = output_dir / f"{video_code}_cut_{cut_index:02d}.mp4"
+        logger.info(
+            f"==> Iniciando corte automático: {title} ({video_code} - Corte {cut_index})"
+        )
+        logger.info(f"    Tempo: {float(start_time):.1f}s - {float(end_time):.1f}s")
+
+        # Remove version antiga do cut para evitar sujeira
+        if output_file.exists():
+            output_file.unlink()
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            str(float(start_time)),
+            "-i",
+            str(video_path),
+            "-t",
+            str(float(duration)),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            str(output_file),
+        ]
+
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            logger.info(f"[SUCCESS] Corte gerado: {output_file.name}")
+            # Do NOT update status here, let 5_export do it.
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Erro no FFmpeg ao gerar {output_file.name}: {e}")
+            logger.error(f"Stderr: {e.stderr}")
+            supabase_client.update_cut_status(video_code, cut_index, "failed")
+
+    logger.info("\n✓ Fila de cortes concluída!")
+    print(f"\nProximo passo: python scripts/5_export.py")
+    sys.exit(0)
+
+
 def main():
     """Função principal."""
     parser = argparse.ArgumentParser(description="Corte de vídeos virais.")
@@ -168,28 +262,29 @@ def main():
     args = parser.parse_args()
 
     if args.latest:
-        logger.info("Buscando análise e vídeo mais recentes...")
+        logger.info("Buscando análise e vídeo mais recentes (Modo Legacy)...")
         video_path, analysis_path = find_latest_analysis()
     elif args.video_path and args.analysis_path:
         video_path = Path(args.video_path)
         analysis_path = Path(args.analysis_path)
     elif args.analysis_path:  # Se passou apenas um, assume que é a análise
         analysis_path = Path(args.analysis_path)
-        # Tenta inferir o vídeo a partir da análise
         with open(analysis_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         config = load_config()
         raw_dir = Path(config["paths"]["raw_videos"])
         video_path = raw_dir / f"{data['video_id']}.mp4"
     else:
-        logger.info("Buscando análise e vídeo mais recentes...")
-        video_path, analysis_path = find_latest_analysis()
+        run_autonomous_cuts()
 
     try:
         logger.info(f"Vídeo: {video_path}")
         logger.info(f"Análise: {analysis_path}")
 
         output_files = cut_video(video_path, analysis_path)
+
+        # Se usou formato standalone, não atualizamos o BD mais daqui
+        # O 5_export.py se encarrega disso.
 
         print(f"\n✓ Cortes concluídos!")
         print(f"Total de segmentos extraídos: {len(output_files)}")

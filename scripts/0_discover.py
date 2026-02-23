@@ -20,50 +20,40 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class VideoDiscoverer:
-    def __init__(self, db_path: str = "data/discovery_history.db"):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+from scripts.utils import supabase_client
 
-    def _init_db(self):
-        """Inicializa o banco de dados de histórico para evitar duplicatas."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS processed_videos (
-                video_id TEXT PRIMARY KEY,
-                title TEXT,
-                channel TEXT,
-                discovered_at TIMESTAMP,
-                processed BOOLEAN DEFAULT 0
-            )
-        """)
-        conn.commit()
-        conn.close()
+
+class VideoDiscoverer:
+    def __init__(self):
+        # We no longer use local SQLite; using Supabase Postgres instead.
+        pass
 
     def is_processed(self, video_id: str) -> bool:
-        """Verifica se o vídeo já foi descoberto ou processado."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1 FROM processed_videos WHERE video_id = ?", (video_id,))
-        result = cursor.fetchone()
-        conn.close()
-        return result is not None
+        """Verifica se o vídeo já foi descoberto no Supabase."""
+
+        # A simple check: if the video exists in the videos table, it's processed
+        if not supabase_client.SUPABASE_AVAILABLE:
+            logger.warning("Supabase não disponível. Histórico não será checado.")
+            return False
+
+        client = supabase_client.get_supabase_client()
+        if not client:
+            return False
+
+        try:
+            res = (
+                client.table("videos").select("id").eq("video_code", video_id).execute()
+            )
+            data = res[1] if isinstance(res, tuple) else res.data
+            return len(data) > 0
+        except Exception as e:
+            logger.error(f"Erro ao checar processed no Supabase: {e}")
+            return False
 
     def mark_discovered(self, video_id: str, title: str, channel: str):
-        """Registra no banco que um vídeo foi descoberto."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO processed_videos (video_id, title, channel, discovered_at)
-            VALUES (?, ?, ?, ?)
-        """,
-            (video_id, title, channel, datetime.now().isoformat()),
-        )
-        conn.commit()
-        conn.close()
+        """Registra no banco Supabase que um vídeo foi descoberto."""
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        supabase_client.register_discovered_video(video_id, url, title, channel)
 
     def fetch_top_videos(
         self,

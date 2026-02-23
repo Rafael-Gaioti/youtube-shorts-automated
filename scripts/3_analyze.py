@@ -103,9 +103,19 @@ def analyze_transcript(
     if max_cuts is None:
         max_cuts = cuts_cfg["max_cuts_per_video"]
 
-    # Carregar transcrição
     with open(transcript_path, "r", encoding="utf-8") as f:
         transcript_data = json.load(f)
+
+    # --- NOVO: CHECK DE SAÚDE DA TRANSCRIÇÃO ---
+    audit_report = transcript_data.get("audit_report", {})
+    is_unhealthy = audit_report.get("is_healthy") is False
+    if is_unhealthy:
+        logger.warning(
+            f"🚨 TRANSCRICÃO INSTÁVEL: O auditor detectou problemas de qualidade (Razão: {audit_report.get('hallucination_ratio', 0):.2%})"
+        )
+        logger.warning(
+            "CUIDADO: Este vídeo pode conter alucinações de IA (repetições ou gibberish)."
+        )
 
     # Preparar texto para análise com numeração de linhas, speaker e flag de overlap
     segments_text = []
@@ -151,23 +161,18 @@ def analyze_transcript(
     system_prompt += f"""
 
 ### STRICT SELECTION RULES (MANDATORY):
+- Rule #0: ABSOLUTE FIDELITY. Use ONLY words and concepts clearly expressed in the transcript. DO NOT invent consequences or actions not supported by the video text.
 - Each cut MUST be between {min_dur} and {max_dur} seconds long. REJECT shorter cuts.
-- AVOID any segment tagged [OVERLAP] — these are moments where speakers talk simultaneously and the transcript will be unreliable.
-- AVOID promotional content: ads, sponsorships, QR codes, "link in bio", discount codes, product placements.
-- PREFER segments where a SINGLE speaker (S1 or S2) talks clearly for the entire cut.
-- PREFER clean speaker transitions (S1 finishes, then S2 starts) — NOT simultaneous speech.
-- The `speaker_map` keys are line numbers (e.g., L0, L5). Map each line in the cut to its speaker number.
-- `on_screen_text` must be a SHORT, IMPACTFUL headline in ALL CAPS (max 5 words) summarizing the cut's hook.
-- `thumbnail_hook` (NEW/CRITICAL): A 2-to-3 word CLICKBAIT trigger for the thumbnail. Must CREATE FEAR, FOMO, or EXTREME CURIOSITY. Transform the topic into a personal threat or an urgent revelation. Do NOT summarize info. Example: instead of "AI Jobs Market", use "VOCÊ VAI SUMIR" or "A IA VENCEU" or "SEU EMPREGO ACABOU".
-- `content_type` (CRITICAL): Classify the cut to trigger specific dynamic colors:
-    - `"fear_mistake"`: If the hook is cautionary, dangerous, or about a fail. (Triggers White/Red)
-    - `"success_wealth"`: If the hook is about money, winning, or achievement. (Triggers Yellow/Green)
-    - `"mystery_revelation"`: If the hook is a secret, tech insight, or "holy grail". (Triggers Cyan/Purple)
-    - `"general_alert"`: Default category for high energy moments. (Triggers Yellow/Red)
-- `thumbnail_strategy` (NEW/CRITICAL): A nested JSON object for graphic art direction. Must contain:
-    - `"peak_action_offset"` (float): The exact second (relative to the cut start, between 0.0 and 5.0) where the speaker shows intense emotion. Pick the peak moment.
-    - `"zoom_level"` (float): Multiplier between 1.0 and 1.3 to crop the face. Use 1.2 or 1.3 for dramatic/aggressive hooks to create claustrophobia.
-    - `"vignette"` (bool): True if the hook is aggressive/fearful (darkens the edges to add tension), False otherwise.
+- AVOID any segment tagged [OVERLAP] — moments where speakers talk simultaneously.
+- AVOID promotional content, sponsorship mentions, or generic intros.
+- `on_screen_text`: SHORT, IMPACTFUL (max 5 words), ALL CAPS.
+- `thumbnail_hook` (ELITE REQUISITE): 2-to-3 words max. CLICKBAIT SENSORIAL. Use Concrete Consequences (FALÊNCIA, ERRO FATAL, LUCRO 10X). Avoid words > 11 chars.
+- `youtube_title` (ELITE REQUISITE): Action + Concrete Consequence + Mechanism + Tension. Address an implicit audience. Target 10/10 score.
+- `content_type`: Classify as `financial_mistake`, `success_revelation`, `dramatic_transformation`, `controversial_opinion`, `emotional_breakdown`, `behind_the_scenes`, or `insight`.
+- `thumbnail_strategy`:
+    - `"peak_action_offset"`: Exact second (0-5s) of high emotion.
+    - `"zoom_level"`: 1.0 to 1.3 (Aggressive crop for tension).
+    - `"vignette"`: True for fear/mystery/aggressive hooks.
 """
 
     # Personalizar prompt se for modelo local (para garantir formato e speaker_map)
@@ -209,6 +214,9 @@ LEGEND: (S1)=Locutor 1, (S2)=Locutor 2, [OVERLAP]=vozes sobrepostas (evitar)
 
 TRANSCRIÇÃO:
 {transcript_formatted}
+
+### QUALITY ALERT:
+{"[WARNING] This transcript has been flagged for low quality/hallucinations. BE EXTRA CAREFUL to only select segments that make perfect sense and are NOT repetitive." if is_unhealthy else "[OK] Transcript quality passed initial audit."}
 
 Selecione os {max_cuts} melhores momentos. IMPORTANTE: cada corte deve ter entre {cuts_cfg.get("min_duration", 25)} e {cuts_cfg.get("max_duration", 55)} segundos. Retorne JSON: {{"cuts": [...]}}"""
 
@@ -837,35 +845,96 @@ def main():
 
     if args.transcript:
         transcript_path = Path(args.transcript)
+        try:
+            logger.info(f"Analisando com perfil '{args.profile}': {transcript_path}")
+            analysis = analyze_transcript(transcript_path, profile_settings=settings)
+
+            # Extrai video_code para atualizar status caso rodado manualmente
+            video_code = str(transcript_path.name).replace("_transcript.json", "")
+            from scripts.utils import supabase_client
+
+            supabase_client.update_video_stage(video_code, "analyzed")
+            for i, cut in enumerate(analysis["cuts"], 1):
+                supabase_client.register_cut(
+                    video_code=video_code,
+                    cut_index=i,
+                    start_time=cut.get("start", 0),
+                    end_time=cut.get("end", 0),
+                    hook_text=cut.get("thumbnail_hook", "") or cut.get("hook", ""),
+                    headline=cut.get("on_screen_text", "")
+                    or cut.get("youtube_title", ""),
+                )
+
+            print("\n✓ Análise concluída!")
+            print(f"Cortes selecionados: {len(analysis['cuts'])}")
+            print(f"Score viral médio: {analysis['stats']['avg_viral_score']:.1f}/10")
+            print("\nPróximo passo: python scripts/4_cut.py")
+        except Exception as e:
+            logger.error(f"Erro fatal: {e}", exc_info=True)
+            sys.exit(1)
+
     else:
-        logger.info("Nenhuma transcrição especificada, buscando a mais recente...")
-        transcript_path = find_latest_transcript()
+        from scripts.utils import supabase_client
 
-    try:
-        logger.info(f"Analisando com perfil '{args.profile}': {transcript_path}")
-        analysis = analyze_transcript(transcript_path, profile_settings=settings)
+        logger.info(
+            "Nenhuma transcrição especificada. Buscando fila no Supabase ('transcribed')..."
+        )
+        videos_pendentes = supabase_client.get_videos_by_stage("transcribed")
 
-        print("\n✓ Análise concluída!")
-        print(f"Cortes selecionados: {len(analysis['cuts'])}")
-        print(f"Score viral médio: {analysis['stats']['avg_viral_score']:.1f}/10")
+        if not videos_pendentes:
+            logger.info("Nenhum vídeo pendente de análise ('transcribed') no banco.")
+            sys.exit(0)
 
-        for i, cut in enumerate(analysis["cuts"], 1):
-            print(f"\n{i}. [{cut['content_type']}] Score: {cut['viral_score']:.1f}/10")
-            print(
-                f"   Tempo: {cut['start']:.1f}s - {cut['end']:.1f}s ({cut['duration']:.1f}s)"
+        for v in videos_pendentes:
+            video_code = v.get("video_code")
+            config = load_config()
+            transcripts_dir = Path(config["paths"]["transcripts"])
+            transcript_path = transcripts_dir / f"{video_code}_transcript.json"
+
+            if not transcript_path.exists():
+                logger.error(
+                    f"Transcrição {video_code} não encontrada localmente: {transcript_path}"
+                )
+                supabase_client.update_video_stage(
+                    video_code, "failed", error_log="Transcrição não encontrada"
+                )
+                continue
+
+            logger.info(
+                f"==> Iniciando análise automática: {v.get('title')} ({video_code})"
             )
-            print(f"   Texto tela: {cut.get('on_screen_text', 'N/A')}")
-            print(f"   Título YT:  {cut.get('youtube_title', 'N/A')}")
-            print(f"   Thumb Hook: {cut.get('thumbnail_hook', 'N/A')}")
-            print(f"   Hook: {cut.get('hook', 'N/A')[:50]}...")
-            print(f"   Emoções: {', '.join(cut.get('emotions', []))}")
-            print(f"   Motivo: {cut.get('reason', 'N/A')[:80]}...")
 
-        print("\nPróximo passo: python scripts/4_cut.py")
+            try:
+                analysis = analyze_transcript(
+                    transcript_path, profile_settings=settings
+                )
 
-    except Exception as e:
-        logger.error(f"Erro fatal: {e}", exc_info=True)
-        sys.exit(1)
+                # Opcional: Se quiser salvar no banco *todos* os cortes gerados,
+                # faremos isso num futuro loop. Mas o mínimo é mudar o stage.
+                logger.info(
+                    f"[SUCCESS] Análise concluída. Cortes virais: {len(analysis['cuts'])}"
+                )
+                supabase_client.update_video_stage(video_code, "analyzed")
+                for i, cut in enumerate(analysis["cuts"], 1):
+                    supabase_client.register_cut(
+                        video_code=video_code,
+                        cut_index=i,
+                        start_time=cut.get("start", 0),
+                        end_time=cut.get("end", 0),
+                        hook_text=cut.get("thumbnail_hook", "") or cut.get("hook", ""),
+                        headline=cut.get("on_screen_text", "")
+                        or cut.get("youtube_title", ""),
+                    )
+                logger.info("Status no Supabase atualizado para 'analyzed'.")
+            except Exception as e:
+                logger.error(f"Erro ao analisar {video_code}: {e}", exc_info=True)
+                supabase_client.update_video_stage(
+                    video_code, "failed", error_log=str(e)
+                )
+
+        logger.info("\n✓ Fila de análises concluída!")
+        print(f"\nProximo passo: python scripts/4_cut.py")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
