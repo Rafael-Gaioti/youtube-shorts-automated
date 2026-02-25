@@ -250,3 +250,91 @@ def register_export(
             f"Failed to register export for video {video_code} cut {cut_index}: {e}"
         )
         return False
+
+
+def update_export_with_youtube_details(
+    video_code: str,
+    cut_index: int,
+    youtube_video_id: str,
+) -> bool:
+    """Updates the export record with the YouTube Video ID after upload."""
+    client = get_supabase_client()
+    if not client:
+        return False
+
+    try:
+        # Find combination UUID
+        res = (
+            client.table("cuts")
+            .select("id, videos!inner(video_code)")
+            .eq("videos.video_code", video_code)
+            .eq("cut_index", cut_index)
+            .execute()
+        )
+        data = res[1] if isinstance(res, tuple) else res.data
+
+        if not data:
+            logger.error(f"Cut not found for {video_code}_C{cut_index}")
+            return False
+
+        cut_id = data[0]["id"]
+
+        client.table("exports").update({"youtube_video_id": youtube_video_id}).eq(
+            "cut_id", cut_id
+        ).execute()
+
+        return True
+    except Exception as e:
+        logger.error(
+            f"Failed to update youtube_video_id for {video_code}_C{cut_index}: {e}"
+        )
+        return False
+
+
+def get_uploaded_exports() -> List[Dict[str, Any]]:
+    """Retrieves all exports that have a youtube_video_id and are ready for metrics check."""
+    client = get_supabase_client()
+    if not client:
+        return []
+
+    try:
+        res = (
+            client.table("exports")
+            .select("*, cuts(cut_index, videos(video_code, title))")
+            .not_.is_("youtube_video_id", "null")
+            .execute()
+        )
+        return res[1] if isinstance(res, tuple) else res.data
+    except Exception as e:
+        logger.error(f"Failed to get uploaded exports: {e}")
+        return []
+
+
+def update_export_metrics(
+    export_id: str,
+    views: int,
+    likes: int,
+    comments: int,
+    avg_duration: float = None,
+    avg_percentage: float = None,
+) -> bool:
+    """Updates an export record with real performance metrics."""
+    client = get_supabase_client()
+    if not client:
+        return False
+
+    try:
+        client.table("exports").update(
+            {
+                "views": views,
+                "likes": likes,
+                "comments": comments,
+                "average_view_duration": avg_duration,
+                "average_view_percentage": avg_percentage,
+                "metrics_updated_at": "now()",
+            }
+        ).eq("id", export_id).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to update metrics for export {export_id}: {e}")
+        return False

@@ -261,6 +261,9 @@ def main():
     )
     args = parser.parse_args()
 
+    video_path = None
+    analysis_path = None
+
     if args.latest:
         logger.info("Buscando análise e vídeo mais recentes (Modo Legacy)...")
         video_path, analysis_path = find_latest_analysis()
@@ -276,6 +279,7 @@ def main():
         video_path = raw_dir / f"{data['video_id']}.mp4"
     else:
         run_autonomous_cuts()
+        return
 
     try:
         logger.info(f"Vídeo: {video_path}")

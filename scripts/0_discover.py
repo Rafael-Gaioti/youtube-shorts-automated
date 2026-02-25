@@ -55,6 +55,60 @@ class VideoDiscoverer:
         url = f"https://www.youtube.com/watch?v={video_id}"
         supabase_client.register_discovered_video(video_id, url, title, channel)
 
+    def validate_niche(self, title: str, discovery_rules: dict) -> bool:
+        """Validação em duas camadas: Palavras-chave e IA (GPT-4o-mini)."""
+        niche_filter = discovery_rules.get("niche_filter", {})
+        pos_words = niche_filter.get("positive_keywords", [])
+        neg_words = niche_filter.get("negative_keywords", [])
+
+        title_lower = title.lower()
+
+        # Camada 1: Filtro de Palavras Negativas (Instantâneo)
+        for word in neg_words:
+            if word.lower() in title_lower:
+                logger.info(f"🚫 Vídeo rejeitado (Negative Keyword): {title}")
+                return False
+
+        # Camada 2: Filtro de Palavras Positivas (Heurística rápida)
+        has_positive = False
+        for word in pos_words:
+            if word.lower() in title_lower:
+                has_positive = True
+                break
+
+        # Se tem palavra positiva, passamos para a IA confirmar
+        # Se não tem, ainda assim passamos para a IA se não houver negativas, pois o título pode ser sutil
+
+        # Camada 3: Validação Semântica com IA (GPT-4o-mini - Custo Irrisório)
+        try:
+            from openai import OpenAI
+
+            client = OpenAI()
+            prompt = f"""Analise o título do vídeo e responda 'SIM' se ele for relevante para o nicho de PRODUTIVIDADE, HÁBITOS, ALTA PERFORMANCE ou NEUROCIÊNCIA. Caso contrário, responda 'NÃO'.
+            
+            Título: "{title}"
+            
+            Resposta (Apenas SIM ou NÃO):"""
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=5,
+                temperature=0.0,
+            )
+            result = response.choices[0].message.content.strip().upper()
+            if "SIM" in result:
+                logger.info(f"✅ VÍDEO APROVADO PELA IA: {title}")
+                return True
+            else:
+                logger.info(f"🚫 VÍDEO REJEITADO PELA IA (Off-niche): {title}")
+                return False
+        except Exception as e:
+            logger.warning(
+                f"Falha na validação de IA, usando fallback de palavras-chave: {e}"
+            )
+            return has_positive
+
     def fetch_top_videos(
         self,
         channel_url: str,
@@ -63,18 +117,15 @@ class VideoDiscoverer:
         discovery_rules: dict = None,
     ) -> List[Dict[str, Any]]:
         """
-        Usa yt-dlp para listar videos de um canal e filtrar pelos com maior view_count (ROI).
+        Usa yt-dlp para listar videos e filtrar por ROI dinâmico (Views/Dia).
         """
         discovery_rules = discovery_rules or {}
         logger.info(
-            f"Buscando TOP vídeos (ROI) de: {channel_url} nos últimos {days} dias"
+            f"Buscando vídeos (ROI Funnel) de: {channel_url} nos últimos {days} dias"
         )
 
         date_after = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
 
-        # --flat-playlist é rápido mas nem sempre traz o view_count correto no JSON flat.
-        # Vamos pegar um número maior de itens da playlist para ter base de comparação.
-        # Vamos pegar um número maior de itens da playlist para ter base de comparação.
         cmd = [
             sys.executable,
             "-m",
@@ -104,7 +155,7 @@ class VideoDiscoverer:
                     continue
                 video_data = json.loads(line)
 
-                # Ignorar Shorts e vídeos muito longos conforme regras do perfil
+                # Ignorar Shorts e vídeos muito longos
                 min_dur = discovery_rules.get("min_duration_sec", 300)
                 max_dur = discovery_rules.get("max_duration_sec", 1800)
 
@@ -112,9 +163,19 @@ class VideoDiscoverer:
                 if duration and (duration < min_dur or duration > max_dur):
                     continue
 
-                # Alguns provedores flat não dão view_count.
-                # Se não tiver, assume 0 para não quebrar o sort.
                 view_count = video_data.get("view_count", 0) or 0
+
+                # Cálculo de ROI Estratégico (Views por Dia)
+                publish_date_str = video_data.get("upload_date", "")
+                days_old = 1
+                if publish_date_str:
+                    try:
+                        pub_date = datetime.strptime(publish_date_str, "%Y%m%d")
+                        days_old = max(1, (datetime.now() - pub_date).days)
+                    except:
+                        pass
+
+                roi_score = view_count / days_old
 
                 videos.append(
                     {
@@ -122,13 +183,14 @@ class VideoDiscoverer:
                         "title": video_data["title"],
                         "url": f"https://www.youtube.com/watch?v={video_data['id']}",
                         "view_count": view_count,
+                        "roi_score": roi_score,
                         "channel": video_data.get("channel", "Unknown"),
                         "duration": duration or 0,
                     }
                 )
 
-            # Ordenar por views (Maior primeiro) -> ROI Estratégico
-            videos.sort(key=lambda x: x["view_count"], reverse=True)
+            # Ordenar por ROI Score (Mais viral recente primeiro)
+            videos.sort(key=lambda x: x["roi_score"], reverse=True)
 
         except Exception as e:
             logger.error(f"Falha na descoberta ROI: {e}")
@@ -141,10 +203,11 @@ class VideoDiscoverer:
         max_per_channel: int = 3,
         discovery_rules: dict = None,
     ) -> List[Dict[str, Any]]:
-        """Busca os vídeos com melhor performance que ainda não foram processados."""
+        """Aplica o Funil Dourado: Scanning -> Metadata ROI -> AI Niche Filter."""
         candidates = []
         for channel in channels:
-            # Busca os 50 mais recentes dos últimos 3 meses para comparar ROI
+            # Step 1: Scanner (ROI de Metadados)
+            logger.info(f"🔍 Escaneando {channel} em busca de ROI...")
             all_recent = self.fetch_top_videos(
                 channel, days=90, limit=50, discovery_rules=discovery_rules
             )
@@ -157,8 +220,13 @@ class VideoDiscoverer:
                 if channel_picks >= max_per_channel:
                     break
 
+                # Step 2: Niche Guard (Validação Semântica)
+                logger.info(f"🔬 Validando nicho para: {v['title']}")
+                if not self.validate_niche(v["title"], discovery_rules):
+                    continue
+
                 logger.info(
-                    f"🏆 Top ROI encontrado: {v['title']} ({v['view_count']} views)"
+                    f"🏆 OURO ENCONTRADO: {v['title']} (ROI: {v['roi_score']:.0f} views/dia)"
                 )
                 candidates.append(v)
                 self.mark_discovered(v["id"], v["title"], v["channel"])

@@ -422,6 +422,15 @@ def run_autonomous_upload(
             save_upload_record(video_code, actual_idx, result, analysis)
             results.append(result)
             supabase_client.update_cut_status(video_code, cut_index, "uploaded")
+
+            # Sync YouTube ID to Export table for metrics
+            yt_id = result.get("youtube_video_id")
+            if yt_id and yt_id != "DRY_RUN":
+                supabase_client.update_export_with_youtube_details(
+                    video_code, cut_index, yt_id
+                )
+                logger.info(f"✅ ID do YouTube ({yt_id}) persistido no Supabase!")
+
             logger.info(
                 f"✅ Status do short {video_code}_{cut_index:02d} atualizado para 'uploaded' no banco!"
             )

@@ -1,0 +1,8 @@
+-- Migration: Add YouTube metrics columns to exports table
+ALTER TABLE exports ADD COLUMN IF NOT EXISTS youtube_video_id TEXT;
+ALTER TABLE exports ADD COLUMN IF NOT EXISTS views INTEGER DEFAULT 0;
+ALTER TABLE exports ADD COLUMN IF NOT EXISTS likes INTEGER DEFAULT 0;
+ALTER TABLE exports ADD COLUMN IF NOT EXISTS comments INTEGER DEFAULT 0;
+ALTER TABLE exports ADD COLUMN IF NOT EXISTS average_view_duration NUMERIC;
+ALTER TABLE exports ADD COLUMN IF NOT EXISTS average_view_percentage NUMERIC;
+ALTER TABLE exports ADD COLUMN IF NOT EXISTS metrics_updated_at TIMESTAMP WITH TIME ZONE;
