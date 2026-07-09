@@ -1,0 +1,16 @@
+# Requisitos do Servidor SaaS na VPS (CPU-Only)
+fastapi>=0.100.0
+uvicorn>=0.20.0
+gunicorn>=21.2.0
+supabase>=1.0.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.1
+tqdm>=4.66.0
+yt-dlp>=2024.8.6
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+requests>=2.31.0
+httpx>=0.24.0
+jinja2>=3.1.2
+pybase64>=1.3.0

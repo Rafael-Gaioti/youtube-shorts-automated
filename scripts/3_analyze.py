@@ -357,6 +357,50 @@ Selecione os {max_cuts} melhores momentos. IMPORTANTE: cada corte deve ter entre
             )
             raise
 
+    elif ai_provider == "gemini":
+        gemini_cfg = config.get("gemini_config", {})
+        gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not gemini_api_key or gemini_api_key == "your_gemini_api_key_here":
+            logger.error("Erro: GEMINI_API_KEY ou GOOGLE_API_KEY não configurada no arquivo .env")
+            sys.exit(1)
+
+        try:
+            from openai import OpenAI
+
+            # O endpoint do Gemini é compatível com o protocolo da OpenAI
+            client = OpenAI(
+                api_key=gemini_api_key,
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+            )
+            model_name = gemini_cfg.get("model", "gemini-2.0-flash")
+            logger.info(f"Enviando para Gemini API ({model_name})...")
+
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=gemini_cfg.get("temperature", 0.7),
+                max_tokens=gemini_cfg.get("max_tokens", 8192),
+                response_format={"type": "json_object"},
+            )
+            response_text = response.choices[0].message.content.strip()
+            logger.info("Resposta recebida do Gemini")
+
+            # Debug: Salvar resposta bruta
+            with open("debug_last_ai_response.json", "w", encoding="utf-8") as f:
+                f.write(response_text)
+
+        except ImportError:
+            logger.error(
+                "Erro: 'openai' library não instalada. Execute 'pip install openai'"
+            )
+            sys.exit(1)
+        except Exception as e:
+            logger.error(f"Erro na API do Gemini: {e}")
+            raise
+
     else:  # Default to Claude
         try:
             from anthropic import Anthropic

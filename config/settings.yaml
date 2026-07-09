@@ -11,6 +11,20 @@ paths:
   logs: "logs"
   prompts: "config/prompts"
 
+# Transcription Configuration
+# Options: local (local Whisper model), deepgram (API), groq (API), openai (API)
+transcription_provider: "openai"
+
+deepgram_config:
+  model: "nova-3"
+  smart_format: true
+  diarize: true
+  language: "pt"
+
+groq_whisper_config:
+  model: "whisper-large-v3"
+  language: "pt"
+
 # Whisper Configuration (Optimized for RTX 4060)
 whisper_config:
   model_size: "large-v3" # Options: tiny, base, small, medium, large-v2, large-v3
@@ -27,7 +41,14 @@ whisper_config:
     min_silence_duration_ms: 500
 
 # AI Analysis Configuration
-ai_provider: "openai" # Options: openai, claude, ollama
+ai_provider: "openai" # Options: openai, claude, ollama, gemini
+
+# Gemini API Configuration (Google AI Studio)
+gemini_config:
+  model: "gemini-2.0-flash" # or "gemini-1.5-flash"
+  max_tokens: 8192
+  temperature: 0.7
+  timeout: 300 # seconds
 
 # Claude API Configuration
 claude_config:
@@ -63,6 +84,9 @@ video_config:
   video_bitrate: "5000k"
   preset: "medium" # Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
   crf: 23 # Constant Rate Factor (lower = better quality, 18-28 recommended)
+  auto_reframe: true # Habilita enquadramento inteligente
+  reframe_step_frames: 10 # Analisa 1 a cada 10 frames (otimização de CPU)
+  reframe_pan_duration: 0.5 # Duração da transição de câmera (em segundos)
 
 # YouTube Download Configuration
 download_config:
@@ -74,9 +98,9 @@ download_config:
 
 # Cuts Analysis Configuration
 cuts_config:
-  min_duration: 25 # seconds (aumentado para garantir densidade de conteúdo e qualidade de podcast)
-  max_duration: 55 # seconds (limite do Shorts é 60s)
-  target_duration: 35 # ideal duration
+  min_duration: 15
+  max_duration: 55
+  target_duration: 30
   min_viral_score: 5.0 # fallback — perfis em user_profiles.json têm prioridade (recommended=4.0)
   max_cuts_per_video: 5 # maximum number of cuts to extract from analysis
   max_cuts_to_export: 3 # maximum number of cuts to actually export (best ones)

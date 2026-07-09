@@ -3,7 +3,11 @@ Script 4: Corte de Vídeos
 Extrai os segmentos identificados pela análise usando FFmpeg.
 """
 
+import os
 import sys
+# Adicionar o diretório raiz ao path para permitir imports de scripts.*
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import json
 import logging
 import subprocess
@@ -261,6 +265,11 @@ def main():
     )
     args = parser.parse_args()
 
+    # Se apenas um argumento posicional JSON foi passado, trata como analysis_path
+    if args.video_path and args.video_path.endswith(".json") and not args.analysis_path:
+        args.analysis_path = args.video_path
+        args.video_path = None
+
     video_path = None
     analysis_path = None
 
@@ -290,7 +299,7 @@ def main():
         # Se usou formato standalone, não atualizamos o BD mais daqui
         # O 5_export.py se encarrega disso.
 
-        print(f"\n✓ Cortes concluídos!")
+        print(f"\n[SUCCESS] Cortes concluidos!")
         print(f"Total de segmentos extraídos: {len(output_files)}")
 
         for i, file in enumerate(output_files, 1):

@@ -198,6 +198,31 @@ def main():
                 logger.info(
                     "Analysis com cortes já existe. Pulando análise (use --force-analyze para re-analisar)."
                 )
+                # Auto-sincronizar cortes existentes com o banco de dados Supabase
+                try:
+                    from scripts.utils import supabase_client
+                    # Registrar vídeo caso não exista e atualizar estágio para 'analyzed'
+                    supabase_client.register_discovered_video(
+                        video_code=video_id,
+                        url=url,
+                        title=f"Vídeo de Fila ({video_id})",
+                        channel="Fila Web"
+                    )
+                    supabase_client.update_video_stage(video_id, "analyzed")
+                    
+                    # Registrar todos os cortes da análise existente no banco
+                    for i, cut in enumerate(_a["cuts"], 1):
+                        supabase_client.register_cut(
+                            video_code=video_id,
+                            cut_index=i,
+                            start_time=cut.get("start", 0),
+                            end_time=cut.get("end", 0),
+                            hook_text=cut.get("thumbnail_hook", "") or cut.get("hook", ""),
+                            headline=cut.get("on_screen_text", "") or cut.get("youtube_title", ""),
+                        )
+                    logger.info("Cortes da análise pré-existente sincronizados no Supabase.")
+                except Exception as e:
+                    logger.warning(f"Erro ao sincronizar análise existente com o Supabase: {e}")
             else:
                 if not run_script(
                     "3_analyze.py",

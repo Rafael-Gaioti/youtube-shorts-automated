@@ -3,8 +3,8 @@
         "name": "ROI Máximo (Recomendado)",
         "description": "Estratégia validada de alto engajamento com legendas dinâmicas.",
         "caption_styles": {
-            "primary_color": "&H00FFFF",
-            "secondary_color": "&H00FFFF00",
+            "primary_color": "&H0000FFFF",
+            "secondary_color": "&H00FFFFFF",
             "font_size": 52
         },
         "analysis_config": {
@@ -16,34 +16,8 @@
         },
         "analysis_bias": "high_retention_segments",
         "niche_filter": {
-            "positive_keywords": [
-                "produtividade",
-                "hábito",
-                "rotina",
-                "foco",
-                "disciplina",
-                "sono",
-                "performance",
-                "tempo",
-                "estudo",
-                "biologia",
-                "neurociência",
-                "aprendizado",
-                "carreira",
-                "negócios"
-            ],
-            "negative_keywords": [
-                "política",
-                "futebol",
-                "games",
-                "humor",
-                "comédia",
-                "fofoca",
-                "eleições",
-                "novela",
-                "crime",
-                "policial"
-            ]
+            "positive_keywords": [],
+            "negative_keywords": []
         }
     },
     "custom_test": {

@@ -23,6 +23,8 @@ from scripts.tools.thumbnail_generator import generate_thumbnail
 from scripts.tools.frame_selector import extract_best_frame
 from scripts.tools.design_auditor import DesignAuditor
 from scripts.tools.video_quarantine import quarantine_video
+from scripts.tools.auto_reframe import AutoReframeEngine
+from scripts.tools.emoji_mapper import enrich_word_with_emoji
 
 # Configurar logging
 logging.basicConfig(
@@ -58,11 +60,11 @@ def create_ass_for_cut(
     end_time: float,
     ass_output: Path,
     speakers_data: Optional[List[dict]] = None,
-    primary_color: str = "&H00FFFF",
-    secondary_color: str = "&H00FFFF00",
-    font_size: int = 18,
+    primary_color: str = "&H0000FFFF",  # Highlighted: Yellow
+    secondary_color: str = "&H00FFFFFF",  # Base: White
+    font_size: int = 48,
 ) -> bool:
-    """Gera um arquivo ASS com efeito de karaoke (palavra por palavra)."""
+    """Gera um arquivo ASS com efeito de karaoke (palavra por palavra) e emojis."""
     if not transcript_path.exists():
         logger.warning(f"Transcrição não encontrada: {transcript_path}")
         return False
@@ -74,7 +76,8 @@ def create_ass_for_cut(
     if not segments:
         return False
 
-    # Header do arquivo ASS
+    # Header do arquivo ASS com estilos modernos (sem caixa preta)
+    # BorderStyle = 1 (Contorno + Sombra), Outline = 5, Shadow = 2
     ass_header = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -84,166 +87,117 @@ def create_ass_for_cut(
         "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        f"Style: Default,Arial Black,{font_size},{primary_color},{secondary_color},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,10,2,2,10,10,250,1",
-        f"Style: Speaker2,Arial Black,{font_size},{secondary_color},{primary_color},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,3,10,2,2,10,10,150,1",
+        f"Style: Default,Arial Black,{font_size},{primary_color},{secondary_color},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,10,10,250,1",
+        f"Style: Speaker2,Arial Black,{font_size},&H00FFFF00,{secondary_color},&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,10,10,250,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
 
-    events = []
-
-    # Pré-processamento: Identificar todos os oradores únicos no intervalo do corte
-    unique_speakers_set = set()
-    if speakers_data:
-        for s in speakers_data:
-            sid = s.get("id") or s.get("speaker")
-            if sid:
-                unique_speakers_set.add(sid)
-    else:
-        # Scan segments to find speakers in range
-        for seg in segments:
-            if seg["end"] <= start_time or seg["start"] >= end_time:
-                continue
-            sid = seg.get("speaker")
-            if sid:
-                unique_speakers_set.add(sid)
-
-    unique_speakers_list = sorted(list(unique_speakers_set))
-
+    # Filtrar e aplanar todas as palavras no intervalo de tempo
+    words_in_cut = []
     for seg in segments:
-        s, e = seg["start"], seg["end"]
-
-        # Verificar se o segmento está dentro do intervalo do corte
-        if e <= start_time or s >= end_time:
-            continue
-
         words = seg.get("words", [])
-        if not words:
-            # Fallback para segmento inteiro
-            rel_start = max(0, s - start_time)
-            rel_end = min(end_time - start_time, e - start_time)
-
-            if rel_start < rel_end:
-                line_text = seg["text"].strip().upper()
-                events.append(
-                    f"Dialogue: 0,{format_timestamp_ass(rel_start)},{format_timestamp_ass(rel_end)},Default,,0,0,0,,{line_text}"
-                )
-            continue
-
-        # --- LOGICA DE AGRUPAMENTO E ANIMACAO ---
-        # Agrupamos palavras curtas para melhorar a legilibidade
-        grouped_words = []
         if words:
-            current_group = []
-            group_start = -1
-            group_duration = 0
-
             for w in words:
                 w_start, w_end = w["start"], w["end"]
                 if w_end <= start_time or w_start >= end_time:
                     continue
-
-                if not current_group:
-                    current_group = [w]
-                    group_start = w_start
-                    group_duration = w_end - w_start
-                else:
-                    # Critérios MELHORADOS para agrupar:
-                    # 1. Duração acumulada < 0.7s (antes era 0.4) = mais tempo de leitura
-                    # 2. OU Comprimento do texto < 15 chars (evita quebrar frases curtas)
-                    # 3. MAS força quebra se passar de 35 chars (evita linhas gigantes)
-
-                    current_text_len = sum(len(x["word"]) + 1 for x in current_group)
-                    gap_to_next = w_start - current_group[-1]["end"]
-
-                    # Se houver pausa grande (>0.5s), quebra o grupo (ponto natural)
-                    force_break = (gap_to_next > 0.5) or (current_text_len > 30)
-
-                    should_group = group_duration < 0.7 or len(w["word"].strip()) <= 3
-
-                    if not force_break and should_group:
-                        current_group.append(w)
-                        group_duration = w_end - group_start
-                    else:
-                        # ANTES DE FECHAR: Verificar GAP
-                        # Se o gap para a próxima palavra for pequeno (<0.2s), estender o 'end' deste grupo
-                        # para cobrir o buraco e evitar flicker.
-                        last_end = current_group[-1]["end"]
-                        if (w_start - last_end) < 0.2:
-                            # Estender levemente o fim do grupo atual para tocar o próximo
-                            # Mas cuidado para não atropelar
-                            actual_end = w_start
-                        else:
-                            actual_end = last_end
-
-                        grouped_words.append(
-                            {
-                                "text": " ".join(
-                                    [x["word"].strip() for x in current_group]
-                                ).upper(),
-                                "start": group_start,
-                                "end": actual_end,
-                            }
-                        )
-                        current_group = [w]
-                        group_start = w_start
-                        group_duration = w_end - w_start
-
-            # Adicionar último grupo
-            if current_group:
-                grouped_words.append(
-                    {
-                        "text": " ".join(
-                            [x["word"].strip() for x in current_group]
-                        ).upper(),
-                        "start": group_start,
-                        "end": current_group[-1]["end"],
-                    }
-                )
-
-        # Estilo "Pop-up Animated": zoom effect {\fscx50\fscy50\t(0,100,\fscx100\fscy100)}
-        for gw in grouped_words:
-            w_abs_start = gw["start"]
-            w_rel_start = max(0, w_abs_start - start_time)
-            w_rel_end = min(end_time - start_time, gw["end"] - start_time)
-
-            if w_rel_start >= w_rel_end:
+                words_in_cut.append(w)
+        else:
+            s, e = seg["start"], seg["end"]
+            if e <= start_time or s >= end_time:
                 continue
+            words_in_cut.append({
+                "word": seg["text"].strip(),
+                "start": s,
+                "end": e,
+                "speaker": seg.get("speaker")
+            })
 
-            # Identificar o orador para este momento (usando o ponto médio do grupo para robustez)
-            w_midpoint = (gw["start"] + gw["end"]) / 2
-            style_name = "Default"
+    if not words_in_cut:
+        logger.warning("Nenhuma palavra encontrada no intervalo do corte.")
+        return False
 
-            # -- Lógica de Estilo Robusta (Híbrida) --
-            # Problema: IDs variam (1, 3, SPEAKER_00...). Hardcoding falha.
-            # Solução: Usar índice relativo. O 1º ID da lista (sorted) é Default. O resto é Speaker2.
+    # Agrupar palavras em linhas de no máximo 4 palavras ou 18 caracteres para visual colossal
+    lines_words = []
+    current_line = []
+    
+    for w in words_in_cut:
+        if not current_line:
+            current_line.append(w)
+        else:
+            gap = w["start"] - current_line[-1]["end"]
+            line_chars = sum(len(x["word"]) + 1 for x in current_line)
+            
+            if gap > 0.5 or len(current_line) >= 4 or line_chars > 18:
+                lines_words.append(current_line)
+                current_line = [w]
+            else:
+                current_line.append(w)
+                
+    if current_line:
+        lines_words.append(current_line)
 
-            style_name = "Default"
+    events = []
+    
+    # Pré-processar oradores
+    unique_speakers_set = set()
+    for w in words_in_cut:
+        sid = w.get("speaker")
+        if sid:
+            unique_speakers_set.add(sid)
+    unique_speakers_list = sorted(list(unique_speakers_set))
 
-            # Tentar identificar o orador atual com precisão temporal
-            current_speaker = seg.get("speaker")
-            midpoint = (gw["start"] + gw["end"]) / 2
+    for idx, line in enumerate(lines_words):
+        line_start_abs = line[0]["start"]
+        line_end_abs = line[-1]["end"]
+        
+        rel_start = max(0, line_start_abs - start_time)
+        rel_end = min(end_time - start_time, line_end_abs - start_time)
+        
+        if rel_start >= rel_end:
+            continue
+            
+        # Estender tempo final se a próxima linha iniciar logo em seguida (< 0.15s) para evitar flicker
+        if idx < len(lines_words) - 1:
+            next_start_abs = lines_words[idx + 1][0]["start"]
+            next_rel_start = max(0, next_start_abs - start_time)
+            if (next_rel_start - rel_end) < 0.15:
+                rel_end = next_rel_start
 
-            if speakers_data:
-                for s_info in speakers_data:
-                    if (s_info["start"] - 0.1) <= midpoint <= (s_info["end"] + 0.1):
-                        current_speaker = s_info.get("id") or s_info.get("speaker")
-                        break
+        # Determinar orador predominante na linha
+        style_name = "Default"
+        line_speaker = line[0].get("speaker")
+        if line_speaker is not None and unique_speakers_list:
+            if line_speaker != unique_speakers_list[0]:
+                style_name = "Speaker2"
 
-            # Se identificou um orador e ele NÃO é o primeiro da lista, aplica Speaker2
-            if current_speaker is not None and unique_speakers_list:
-                # Se for o primeiro da lista ordenada (ex: 1), mantém Default (Amarelo)
-                # Se for qualquer outro (ex: 3), aplica Speaker2 (Ciano)
-                if current_speaker != unique_speakers_list[0]:
-                    style_name = "Speaker2"
-
-            # Efeito Zoom-Pop: inicia em 80% e vai para 100% em 100ms
-            animation = "{\\fscx80\\fscy80\\t(0,100,\\fscx100\\fscy100)}"
-
-            events.append(
-                f"Dialogue: 0,{format_timestamp_ass(w_rel_start)},{format_timestamp_ass(w_rel_end)},{style_name},,0,0,0,,{animation}{gw['text']}"
-            )
+        # Montar expressão de Karaoke para cada palavra da linha
+        karaoke_text_parts = []
+        for i, w in enumerate(line):
+            w_start = w["start"]
+            if i < len(line) - 1:
+                w_dur_sec = line[i+1]["start"] - w_start
+            else:
+                w_dur_sec = w["end"] - w_start
+                
+            w_dur_cs = max(1, int(round(w_dur_sec * 100)))
+            
+            # Enriquecer palavra com Emojis
+            enriched_word = enrich_word_with_emoji(w["word"])
+            
+            karaoke_text_parts.append(f"{{\\kf{w_dur_cs}}}{enriched_word}")
+            
+        line_karaoke_text = " ".join(karaoke_text_parts)
+        
+        # Efeito de zoom-pop sutil no início da linha inteira
+        animation = "{\\fscx85\\fscy85\\t(0,80,\\fscx100\\fscy100)}"
+        full_text = f"{animation}{line_karaoke_text}"
+        
+        events.append(
+            f"Dialogue: 0,{format_timestamp_ass(rel_start)},{format_timestamp_ass(rel_end)},{style_name},,0,0,0,,{full_text}"
+        )
 
     if not events:
         return False
@@ -309,8 +263,8 @@ def export_to_shorts(
     caption_styles = (
         (profile_settings or {}).get("user_profile", {}).get("caption_styles", {})
     )
-    primary_color = caption_styles.get("primary_color", "&H00FFFF")
-    secondary_color = caption_styles.get("secondary_color", "&H0000FF")
+    primary_color = caption_styles.get("primary_color", "&H0000FFFF")  # Default: Yellow Highlight
+    secondary_color = caption_styles.get("secondary_color", "&H00FFFFFF")  # Default: White Base
     # Aumentar font_size padrão de 18 para 75 para escala 1080p
     font_size = caption_styles.get("font_size", 75)
 
@@ -427,6 +381,33 @@ def export_to_shorts(
     # Sanitizar headline para o FFmpeg drawtext
     safe_headline = headline.replace("'", "").replace(":", "").strip()
 
+    # --- AUTO-REFRAME ANALYSIS ---
+    dynamic_crop_filter = None
+    if video_cfg.get("auto_reframe", True):
+        try:
+            import cv2
+            cap = cv2.VideoCapture(str(input_video.absolute()))
+            orig_w = float(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            orig_h = float(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            cap.release()
+            
+            if orig_w > 0 and orig_h > 0:
+                step_frames = video_cfg.get("reframe_step_frames", 10)
+                pan_duration = video_cfg.get("reframe_pan_duration", 0.5)
+                
+                engine = AutoReframeEngine(step_frames=step_frames, pan_duration=pan_duration)
+                detections = engine.analyze_video_faces(input_video)
+                if detections:
+                    dynamic_crop_filter = engine.generate_ffmpeg_crop_expression(detections, orig_w, orig_h)
+                    if dynamic_crop_filter:
+                        logger.info(f"Auto-Reframe: Expressão de crop dinâmica gerada com sucesso.")
+                    else:
+                        logger.info("Auto-Reframe: Não foi possível gerar a expressão de crop. Usando fallback.")
+                else:
+                    logger.info("Auto-Reframe: Nenhum rosto detectado no segmento. Usando fallback.")
+        except Exception as e:
+            logger.warning(f"Erro ao executar análise de Auto-Reframe: {e}. Usando fallback para crop estático.")
+
     attempts = 0
     max_attempts = 3  # Aumentado para permitir múltiplos fixes (Thumb + Headline)
     auditor = DesignAuditor()
@@ -434,6 +415,7 @@ def export_to_shorts(
     current_headline_fontsize = 95 if len(safe_headline) <= 15 else 70
     audit_results = {}
     output_file = None
+    best_frame_path = None
 
     # Gerar nome base uma vez
     if "thumb_hook" in locals() and thumb_hook:
@@ -464,10 +446,16 @@ def export_to_shorts(
         logger.info(f"--- Tentativa {attempts + 1} de exportação: {final_name} ---")
 
         # Re-montar filtros do FFmpeg para permitir mudanças de fonte na Headline
-        video_filters = [
-            f"scale={width}:{height}:force_original_aspect_ratio=increase",
-            f"crop={width}:{height}",
-        ]
+        if dynamic_crop_filter:
+            video_filters = [
+                dynamic_crop_filter,
+                f"scale={width}:{height}",
+            ]
+        else:
+            video_filters = [
+                f"scale={width}:{height}:force_original_aspect_ratio=increase",
+                f"crop={width}:{height}",
+            ]
 
         # Adicionar Legendas ASS (Karaoke)
         if ass_path and ass_path.exists():
@@ -476,16 +464,23 @@ def export_to_shorts(
 
         # Adicionar Headline com fonte atual (pode ser reduzida no auto-fix)
         if safe_headline:
+            if sys.platform == "win32":
+                font_param = "fontfile='C\\:/Windows/Fonts/ariblk.ttf'"
+                watermark_font = "fontfile='C\\:/Windows/Fonts/arial.ttf'"
+            else:
+                font_param = "font='Arial Black'"
+                watermark_font = "font='Arial'"
+
             drawtext_filter = (
-                f"drawtext=text='{safe_headline}':fontcolor=white:fontsize={current_headline_fontsize}:font='Arial Black':"
+                f"drawtext=text='{safe_headline}':fontcolor=white:fontsize={current_headline_fontsize}:{font_param}:"
                 f"borderw=4:bordercolor=black@0.8:shadowx=6:shadowy=6:shadowcolor=black@0.8:"
                 f"x=(w-text_w)/2:y=220"
             )
             video_filters.append(drawtext_filter)
 
             watermark_filter = (
-                "drawtext=text='v4.3':fontcolor=white@0.5:fontsize=32:font='Arial':"
-                "x=w-text_w-40:y=40:borderw=1:bordercolor=black@0.3"
+                f"drawtext=text='v4.3':fontcolor=white@0.5:fontsize=32:{watermark_font}:"
+                f"x=w-text_w-40:y=40:borderw=1:bordercolor=black@0.3"
             )
             video_filters.append(watermark_filter)
 
@@ -653,7 +648,37 @@ def export_to_shorts(
             logger.error(f"Erro no loop de exportação: {e}")
             break
 
-    # Cleanup
+    # Sincronizar com Supabase
+    try:
+        from scripts.utils import supabase_client
+        # Extrair cut_index do nome do arquivo
+        import re
+        cut_part = input_video.stem.split("_cut_")[-1]
+        match_idx = re.search(r"(\d+)", cut_part)
+        cut_index = int(match_idx.group(1)) if match_idx else 1
+        
+        is_approved = audit_results.get("is_approved", False)
+        status = "exported" if is_approved else "quarantined"
+        
+        # Atualizar status do corte
+        supabase_client.update_cut_status(video_id, cut_index, status)
+        
+        if is_approved:
+            supabase_client.register_export(
+                video_code=video_id,
+                cut_index=cut_index,
+                filepath=str(output_file.absolute()),
+                overall_score=audit_results.get("overall_score"),
+                viral_potential=audit_results.get("viral_potential"),
+                gatekeeper_approved=True
+            )
+            logger.info(f"Corte {cut_index} registrado com sucesso no Supabase.")
+        else:
+            logger.warning(f"Corte {cut_index} reprovado e marcado como {status} no Supabase.")
+    except Exception as e:
+        logger.warning(f"Não foi possível registrar o status do corte no Supabase: {e}")
+
+    # Cleanup temp files
     if ass_path and ass_path.exists():
         try:
             ass_path.unlink()
@@ -886,6 +911,11 @@ def main():
                 output_files.append(out_file)
 
             logger.info(f"Exportação concluída: {len(output_files)} short(s) gerados.")
+            try:
+                from scripts.utils import supabase_client
+                supabase_client.update_video_stage(video_id, "exported")
+            except Exception as e:
+                logger.warning(f"Erro ao atualizar estágio do vídeo para 'exported': {e}")
             return
         except Exception as e:
             logger.error(f"Erro fatal: {e}", exc_info=True)

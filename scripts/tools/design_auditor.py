@@ -695,20 +695,18 @@ class DesignAuditor:
         }
 
         # AGGRESSIVE REJECT: If fidelity or semantic fails, force REPROVADO
-        if fidelity_report.get("fidelity_score", 10.0) < 7.0:
+        if fidelity_report.get("score", 10.0) < 7.0:
             final_results["is_approved"] = False
-            final_results["recommendations"] = (
-                final_results.get("recommendations", "")
-                + "\n❌ REPROVADO: Alucinação de conteúdo detectada!"
-            )
+            if not isinstance(final_results.get("recommendations"), list):
+                final_results["recommendations"] = []
+            final_results["recommendations"].append("❌ REPROVADO: Alucinação de conteúdo detectada!")
             final_results["overall_score"] = min(final_results["overall_score"], 4.0)
 
         if semantic_results.get("sanity_score", 10.0) < 7.0:
             final_results["is_approved"] = False
-            final_results["recommendations"] = (
-                final_results.get("recommendations", "")
-                + "\n❌ REPROVADO: Ilogia ou repetição detectada na transcrição!"
-            )
+            if not isinstance(final_results.get("recommendations"), list):
+                final_results["recommendations"] = []
+            final_results["recommendations"].append("❌ REPROVADO: Ilogia ou repetição detectada na transcrição!")
             final_results["overall_score"] = min(final_results["overall_score"], 4.0)
 
         # 7. Salvar no Ledger

@@ -3,7 +3,11 @@ Script 1: Download de Vídeos do YouTube
 Baixa vídeos do YouTube usando yt-dlp com configurações otimizadas.
 """
 
+import os
 import sys
+# Adicionar o diretório raiz ao path para permitir imports de scripts.*
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import logging
 import subprocess
 import shutil

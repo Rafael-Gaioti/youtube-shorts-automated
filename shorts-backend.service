@@ -1,0 +1,12 @@
+[Unit]
+Description=Shorts Automated FastAPI Backend
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/shorts_cortes_ai
+ExecStart=/root/shorts_cortes_ai/venv/bin/gunicorn server:app -w 1 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 --timeout 600
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

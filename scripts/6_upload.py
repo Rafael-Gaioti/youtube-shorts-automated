@@ -15,6 +15,9 @@ import json
 import logging
 import os
 import sys
+# Adicionar o diretório raiz ao path para permitir imports de scripts.*
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import time
 from pathlib import Path
 
