@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
+import { getServerStatus, startPipelineJob, type ServerStatus } from "@/lib/api";
 import {
   Activity,
   Video,
@@ -10,6 +11,13 @@ import {
   CheckCircle2,
   Clock,
   Cpu,
+  Play,
+  Loader2,
+  Wifi,
+  WifiOff,
+  Send,
+  X,
+  AlertTriangle,
 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -53,39 +61,69 @@ const STAGE_CONFIG: Record<
     label: "Transcrevendo...",
   },
   transcribed: { icon: Type, color: "text-purple-400", label: "Transcrito" },
+  analyzing: {
+    icon: Scissors,
+    color: "text-yellow-300 animate-pulse",
+    label: "Analisando...",
+  },
   analyzed: { icon: Scissors, color: "text-yellow-400", label: "Analisado" },
+  cutting: {
+    icon: Scissors,
+    color: "text-orange-300 animate-pulse",
+    label: "Cortando...",
+  },
   exported: { icon: CheckCircle2, color: "text-emerald-400", label: "Pronto" },
+  uploading: {
+    icon: Activity,
+    color: "text-cyan-300 animate-pulse",
+    label: "Subindo...",
+  },
   uploaded: { icon: Activity, color: "text-cyan-400", label: "No YouTube" },
+  failed: { icon: AlertTriangle, color: "text-red-400", label: "Erro" },
 };
 
 const STAGE_PROGRESS: Record<string, number> = {
   discovered: 10,
-  downloading: 25,
-  downloaded: 35,
-  transcribing: 50,
-  transcribed: 65,
-  analyzed: 80,
+  downloading: 20,
+  downloaded: 30,
+  transcribing: 40,
+  transcribed: 55,
+  analyzing: 65,
+  analyzed: 75,
+  cutting: 85,
   exported: 95,
+  uploading: 97,
   uploaded: 100,
   failed: 100,
 };
 
-/*
-## Dashboard Final (Autenticação Corrigida)
-
-Com a chave `anon` correta e a query do Supabase ajustada, o Dashboard agora reflete fielmente o poder do **Funil Dourado**.
-
-![Dashboard Working](file:///C:/Users/gaiot/.gemini/antigravity/brain/0e8a81ab-eba1-428a-91ad-8b38648e3ae0/empty_dashboard_1771986823467.png)
-*Nota: A imagem acima mostra o Dashboard antes da chave final, mas o processo de validação confirmou a aparição de cards de vídeos ativos como o do Muzy.*
-
-### Resultados da Validação Final:
-- **Autenticação**: Erro 401 resolvido.
-- **Filtro de Nicho**: Vídeo "O ERRO SILENCIOSO (MUZY EXPLICA)" aprovado e visível.
-- **Real-time**: Estágios de processamento aparecendo corretamente para o usuário.
-*/
 export default function OperationalDashboard() {
   const [videos, setVideos] = useState<VideoRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null);
+  const [serverOnline, setServerOnline] = useState(false);
+  const [showNewJob, setShowNewJob] = useState(false);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+
+  // Poll server status every 15s
+  const fetchStatus = useCallback(async () => {
+    try {
+      const status = await getServerStatus();
+      setServerStatus(status);
+      setServerOnline(true);
+    } catch {
+      setServerOnline(false);
+      setServerStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 15000);
+    return () => clearInterval(interval);
+  }, [fetchStatus]);
 
   useEffect(() => {
     async function fetchVideos() {
@@ -136,6 +174,21 @@ export default function OperationalDashboard() {
     };
   }, []);
 
+  const handleStartJob = async () => {
+    if (!youtubeUrl.trim()) return;
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      await startPipelineJob(youtubeUrl.trim());
+      setYoutubeUrl("");
+      setShowNewJob(false);
+    } catch (err: unknown) {
+      setSubmitError(err instanceof Error ? err.message : "Erro ao iniciar pipeline");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <main className="min-h-screen p-8 max-w-7xl mx-auto space-y-8">
       {/* Header */}
@@ -146,34 +199,132 @@ export default function OperationalDashboard() {
           </h1>
           <p className="text-gray-400 flex items-center gap-2">
             <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              <span
+                className={cn(
+                  "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
+                  serverOnline ? "bg-emerald-400" : "bg-red-400"
+                )}
+              />
+              <span
+                className={cn(
+                  "relative inline-flex rounded-full h-2 w-2",
+                  serverOnline ? "bg-emerald-500" : "bg-red-500"
+                )}
+              />
             </span>
             Monitor Operacional em Tempo Real
           </p>
         </div>
-        <div className="p-4 glass-card rounded-2xl flex items-center gap-4">
-          <div className="bg-emerald-500/10 p-2 rounded-lg">
-            <Cpu className="w-6 h-6 text-emerald-500" />
-          </div>
-          <div>
-            <div className="text-xs text-gray-400 uppercase font-bold tracking-wider">
-              GPU Status
+        <div className="flex items-center gap-3">
+          {/* Start Job Button */}
+          <button
+            onClick={() => setShowNewJob(!showNewJob)}
+            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-semibold text-sm flex items-center gap-2 transition-all duration-300 hover:scale-105 active:scale-95 shadow-lg shadow-indigo-500/20"
+          >
+            <Play className="w-4 h-4" />
+            Novo Job
+          </button>
+
+          {/* Server Status Card */}
+          <div className="p-4 glass-card rounded-2xl flex items-center gap-4">
+            <div
+              className={cn(
+                "p-2 rounded-lg",
+                serverOnline ? "bg-emerald-500/10" : "bg-red-500/10"
+              )}
+            >
+              {serverOnline ? (
+                <Wifi className="w-6 h-6 text-emerald-500" />
+              ) : (
+                <WifiOff className="w-6 h-6 text-red-500" />
+              )}
             </div>
-            <div className="text-lg font-mono text-white">ACTIVE (RTX)</div>
+            <div>
+              <div className="text-xs text-gray-400 uppercase font-bold tracking-wider">
+                VPS Backend
+              </div>
+              <div
+                className={cn(
+                  "text-lg font-mono",
+                  serverOnline ? "text-emerald-400" : "text-red-400"
+                )}
+              >
+                {serverOnline
+                  ? `ONLINE · ${serverStatus?.active_jobs_count ?? 0} jobs`
+                  : "OFFLINE"}
+              </div>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* New Job Form */}
+      {showNewJob && (
+        <div className="glass-card rounded-2xl p-6 border border-indigo-500/20 animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex items-center gap-3 mb-4">
+            <Cpu className="w-5 h-5 text-indigo-400" />
+            <h3 className="text-white font-semibold text-lg">Iniciar Pipeline</h3>
+            <button
+              onClick={() => setShowNewJob(false)}
+              className="ml-auto text-gray-400 hover:text-white transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="flex gap-3">
+            <input
+              type="text"
+              value={youtubeUrl}
+              onChange={(e) => setYoutubeUrl(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleStartJob()}
+              placeholder="Cole a URL do YouTube aqui..."
+              className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/30 transition-all font-mono text-sm"
+              disabled={submitting || !serverOnline}
+            />
+            <button
+              onClick={handleStartJob}
+              disabled={submitting || !youtubeUrl.trim() || !serverOnline}
+              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-xl font-semibold text-sm flex items-center gap-2 transition-all duration-300 shadow-lg shadow-indigo-500/20"
+            >
+              {submitting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+              {submitting ? "Processando..." : "Iniciar"}
+            </button>
+          </div>
+          {submitError && (
+            <p className="mt-3 text-red-400 text-sm flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4" />
+              {submitError}
+            </p>
+          )}
+          {!serverOnline && (
+            <p className="mt-3 text-yellow-400 text-sm flex items-center gap-2">
+              <WifiOff className="w-4 h-4" />
+              Backend offline — não é possível iniciar jobs.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {loading ? (
           <div className="col-span-full text-center py-20 text-gray-500">
+            <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4" />
             Carregando pipeline...
           </div>
         ) : videos.length === 0 ? (
           <div className="col-span-full text-center py-20 text-gray-500">
-            Nenhum vídeo em processamento.
+            <Video className="w-12 h-12 mx-auto mb-4 opacity-30" />
+            <p className="text-lg mb-2">Nenhum vídeo em processamento.</p>
+            <p className="text-sm">
+              Clique em{" "}
+              <span className="text-indigo-400 font-semibold">Novo Job</span>{" "}
+              para começar.
+            </p>
           </div>
         ) : (
           videos
@@ -219,7 +370,6 @@ export default function OperationalDashboard() {
                       <Progress
                         value={STAGE_PROGRESS[video.stage] || 0}
                         className="h-1 bg-white/5"
-                        // Custom inner styling via global.css if needed, but here simple is enough
                       />
                     </div>
 
@@ -228,7 +378,7 @@ export default function OperationalDashboard() {
                         {video.title || video.video_code}
                       </h3>
                       <p className="text-[10px] text-gray-500 mt-2 font-mono flex items-center gap-1 opacity-70">
-                        <span className="w-1 h-1 rounded-full bg-gray-500"></span>
+                        <span className="w-1 h-1 rounded-full bg-gray-500" />
                         REF: {video.video_code}
                       </p>
                     </div>
